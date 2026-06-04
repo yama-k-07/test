@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html>
+<head><title>Wi-Fi Credentials</title></head>
+<body>
+  <h2>Wi-Fiアクセスポイント表</h2>
+  <ul>
+    {% for ssid, password in wifi_data.items() %}
+      <li><strong>{{ ssid }}</strong>: {{ password }}</li>
+    {% endfor %}
+  </ul>
+
+  <h3>追加</h3>
+  <form method="POST">
+    SSID: <input type="text" name="ssid"><br>
+    Password: <input type="text" name="password"><br>
+    <input type="submit" value="追加">
+  </form>
+
+  <a href="{{ url_for('index') }}">→ トップへ</a>
+</body>
+</html>

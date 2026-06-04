@@ -1,0 +1,48 @@
+{
+  "server_url": "http://127.0.0.1:5000/",
+  "interval_sec": 5,
+  "devices": [
+    {
+      "device_id": "dev001",
+      "ssid": "k",
+      "username": "鈴木",
+      "gateway": "192.168.1.10",
+      "report": false
+    },
+    {
+      "device_id": "dev002",
+      "ssid": "Ando",
+      "username": "佐藤",
+      "gateway": "192.168.1.12",
+      "report": false
+    },
+    {
+      "device_id": "dev003",
+      "ssid": "Ando",
+      "username": "斎藤",
+      "gateway": "192.168.1.13",
+      "report": false
+    },
+    {
+      "device_id": "dev004",
+      "ssid": "k",
+      "username": "佐々木",
+      "gateway": "192.168.1.13",
+      "report": false
+    },
+    {
+      "device_id": "dev005",
+      "ssid": "type-jupiter",
+      "username": "橋下",
+      "gateway": "192.168.1.14",
+      "report": false
+    },
+    {
+      "device_id": "dev006",
+      "ssid": "もっと大きな鮭はらみ",
+      "username": "熊本",
+      "gateway": "192.168.1.14",
+      "report": false
+    }
+  ]
+}

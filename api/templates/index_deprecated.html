@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Area 管理ダッシュボード</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@0.9.4/css/bulma.min.css">
+  <link rel="stylesheet" href="{{url_for('static', filename='style.css')}}">
+  <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
+</head>
+<body class="section">
+  
+  <header class="header">
+    <img src="{{url_for('static', filename='banner.png')}}" class="site-icon" alt="アイコン">
+    <!-- <h1>従業員位置情報・避難指示支援</h1> -->
+  </header><br>
+
+  <!-- エリア横並び -->
+  <section class="box">
+    <h2 class="subtitle">エリアごとの状態</h2>
+    <div style="text-align: left;">← トンネル外側</div><br>
+    <div id="areaBoard" class="area-board"></div>
+    <br><div style="text-align: right;">トンネル内側 →</div>
+  </section>
+
+
+  <!-- エリア・gateway対応設定 -->
+  <section class="box">
+    <h2 class="subtitle">エリア割当設定</h2>
+    <table class="table is-fullwidth">
+      <thead>
+        <tr><th>エリアID</th><th>IPアドレス</th><th>操作</th></tr>
+      </thead>
+      <tbody id="areaTableBody"></tbody>
+    </table>
+    <button class="button is-primary" onclick="addAreaRow()">新規追加</button>
+    <button class="button is-success" onclick="saveAreaMapTable()">保存</button>
+  </section>
+
+  <!-- SSID設定 -->
+  <section class="box">
+    <h2 class="subtitle">接続先設定</h2>
+    <table class="table is-fullwidth">
+      <thead>
+        <tr><th>SSID</th><th>パスワード</th><th>操作</th></tr>
+      </thead>
+      <tbody id="ssidTableBody"></tbody>
+    </table>
+    <button class="button is-primary" onclick="addSsidRow()">新規追加</button>
+    <button class="button is-success" onclick="saveSsidTable()">保存</button>
+  </section>
+  <footer class="footer">
+    <p>まもっち©. All Rights Reserved.</p>
+  </footer>
+  <script src="{{ url_for('static', filename='admin.js') }}"></script>
+</body>
+</html>

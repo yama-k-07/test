@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>ボタン操作UI</title>
+  <link rel="stylesheet" href="{{url_for('static', filename='style.css')}}">
+</head>
+<body>
+  <div class="table-container">
+    <table id="AreaTable"></table>
+  </div>
+  <br><br>
+
+  <div id="buttonContainer" class="button-container"></div>
+
+  <h1>エリア操作</h1>
+  <div class="global-controls">
+    <button id="addLeft">左に追加</button>
+    <button id="addRight">右に追加</button>
+    <button id="delete">削除</button>
+  </div>
+  <a href="{{ url_for('admin_wifi') }}">→ トップへ</a>
+
+  <script src="{{url_for('static', filename='script.js')}}"></script>
+</body>
+</html>

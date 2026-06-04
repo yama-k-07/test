@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>まもっち - LOGIN</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@0.9.4/css/bulma.min.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <style>
+        .login-container {
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .login-card {
+            max-width: 400px;
+            width: 90%;
+            text-align: center;
+        }
+        .login-logo {
+            margin-bottom: 2rem;
+            animation: bounce 2s infinite ease-in-out;
+        }
+        @keyframes bounce {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-10px); }
+        }
+    </style>
+</head>
+<body>
+    <div class="login-container">
+        <div class="box login-card">
+            <div class="login-logo">
+                <img src="{{url_for('static', filename='banner.png')}}" class="site-icon" alt="まもっち">
+            </div>
+            
+            <h1 class="subtitle" style="margin-top: 0; margin-left: 0;">ADMIN ACCESS</h1>
+
+            <div class="field">
+                <div class="control">
+                    <input class="input" type="text" placeholder="OPERATOR ID">
+                </div>
+            </div>
+
+            <div class="field">
+                <div class="control">
+                    <input class="input" type="password" placeholder="PASSWORD">
+                </div>
+            </div>
+
+            <button class="button is-primary is-fullwidth mt-5" id="loginBtn">
+                SYSTEM START
+            </button>
+            
+            <p class="mt-4 is-size-7" style="opacity: 0.6;">© 2024 MAMOTCHI SYSTEM Ver 1.0.2</p>
+        </div>
+    </div>
+
+<script>
+    document.getElementById('loginBtn').addEventListener('click', () => {
+        const id = document.querySelector('input[type="text"]').value;
+        const pw = document.querySelector('input[type="password"]').value;
+
+        // ハリボテなので値は何でもOK
+        fetch('/api/login_mock', { 
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ id: id, password: pw })
+        })
+        .then(res => res.json())
+        .then(data => {
+            if(data.status === "success") {
+                window.location.href = data.redirect;
+            }
+        });
+    });
+</script>
+</body>
+</html>

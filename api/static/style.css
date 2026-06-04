@@ -1,0 +1,413 @@
+/* Google Fontsからドットフォントを読み込み */
+@import url('https://fonts.googleapis.com/css2?family=DotGothic16&display=swap');
+
+:root {
+  --pixel-blue: #207ce5;
+  --pixel-green: #2d9610;
+  --pixel-red: #ff4b2b;
+  /* 重すぎない深緑（透過） */
+  --pixel-dark-alpha: rgba(25, 76, 34, 0.7); 
+  --pixel-dark-solid: #194c22;
+  --glass-bg: rgba(255, 255, 255, 0.65);
+}
+
+body {
+  font-family: 'DotGothic16', sans-serif;
+  background-color: #cbd5e1;
+  /* 控えめなドット背景 */
+  background-image: radial-gradient(rgba(25, 76, 34, 0.15) 1px, transparent 1px);
+  background-size: 24px 24px;
+  color: var(--pixel-dark-solid);
+  padding: 40px;
+  line-height: 1.5;
+}
+
+/* ヘッダー：透明感とピクセル枠 */
+.header {
+  background: var(--glass-bg);
+  backdrop-filter: blur(8px);
+  border: 4px solid var(--pixel-dark-alpha);
+  box-shadow: 6px 6px 0px rgba(0,0,0,0.1);
+  padding: 15px;
+  margin-bottom: 40px;
+  text-align: center;
+}
+
+.site-icon {
+  image-rendering: pixelated;
+  height: 80px;
+  width: auto;
+}
+
+/* ボックス：クリスタル・ビット調 */
+.box {
+  background: var(--glass-bg);
+  backdrop-filter: blur(10px);
+  border: 4px solid var(--pixel-dark-alpha);
+  box-shadow: 8px 8px 0px rgba(25, 76, 34, 0.1);
+  border-radius: 0;
+  padding: 25px;
+  margin-bottom: 30px;
+}
+
+.subtitle {
+  font-family: 'DotGothic16', sans-serif;
+  background: var(--pixel-dark-alpha);
+  color: #fff !important;
+  display: inline-block;
+  padding: 4px 15px;
+  margin-top: -48px; 
+  margin-left: -10px;
+  border: 4px solid var(--pixel-dark-alpha);
+}
+
+/* ===== エリアボード：基本設定（PCなどの横長画面） ===== */
+.area-board {
+  display: grid;
+  grid-template-columns: repeat(
+    auto-fit,
+    minmax(min(12.5%, 140px), 1fr)
+  );
+  gap: 1rem;
+  text-align: center;
+  justify-content: center;
+  transition: all 0.3s ease;
+}
+
+/* ===== 画面が狭い（縦長）時の横スライド設定 ===== */
+@media (max-width: 1200px) {
+.area-board {
+    display: flex;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    justify-content: flex-start;
+    
+    /* 上下のパディングを増やして、指で触れる面積を広げる */
+    padding: 20px 10px 40px 10px; 
+    
+    /* スムーズなスクロールとスナップ */
+    scroll-snap-type: x mandatory;
+    -webkit-overflow-scrolling: touch; /* iOSでの慣性スクロール */
+    
+    /* 標準のスクロールバーを隠さず、むしろ操作しやすくする */
+    gap: 15px; 
+  }
+
+  .area-card {
+    /* カードサイズを少し大きくしてタップ・スワイプしやすく */
+    flex: 0 0 160px; 
+    scroll-snap-align: center; /* 中央に止まるようにして視認性UP */
+    margin-right: 0;
+    /* 影を少し強くして、浮いている（動かせる）感を出す */
+    box-shadow: 10px 10px 0px rgba(0, 0, 0, 0.15);
+  }
+}
+
+/* ===== ビット調カスタムスクロールバー（スマホ・PC共通で太くする） ===== */
+/* 全体のバーの高さ */
+.area-board::-webkit-scrollbar {
+  height: 24px; /* 倍の太さに変更 */
+}
+
+/* バーの通り道 */
+.area-board::-webkit-scrollbar-track {
+  background: rgba(25, 76, 34, 0.15);
+  border: 3px solid var(--pixel-dark-alpha);
+  margin: 0 10px;
+}
+
+/* 動くツマミ部分（ここを掴みやすく） */
+.area-board::-webkit-scrollbar-thumb {
+  background: var(--pixel-green);
+  border: 3px solid var(--pixel-dark-alpha);
+  /* ドット絵風の凹凸デザイン */
+  box-shadow: inset -4px -4px 0px rgba(0,0,0,0.2), 
+              inset 4px 4px 0px rgba(255,255,255,0.3);
+}
+
+/* ホバー時に色を変えて「掴める」ことを強調 */
+.area-board::-webkit-scrollbar-thumb:hover {
+  background: var(--pixel-blue);
+}
+/* ===== ビット調カスタムスクロールバー（横スライド用） ===== */
+.area-board::-webkit-scrollbar {
+  height: 12px;
+}
+
+.area-board::-webkit-scrollbar-track {
+  background: rgba(25, 76, 34, 0.1);
+  border: 2px solid var(--pixel-dark-alpha);
+}
+
+.area-board::-webkit-scrollbar-thumb {
+  background: var(--pixel-green);
+  border: 2px solid var(--pixel-dark-alpha);
+  box-shadow: 2px 2px 0px rgba(0,0,0,0.2);
+}
+
+.area-card {
+  min-width: 0;
+  font-size: clamp(16px, 1.2vw, 20px);
+  background: rgba(66, 133, 123, 0.85); /* 透明度を調整 */
+  border: 3px solid var(--pixel-dark-alpha);
+  color: #fff;
+  transition: transform 0.1s;
+}
+
+.area-card h2 {
+  white-space: normal;
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+  text-align: center;
+  font-size: clamp(16px, 1.2vw, 20px);
+  font-weight: bold;
+  color: #fff !important;
+  background: var(--pixel-dark-alpha);
+  padding: 5px;
+}
+
+.area-card label {
+  font-size: clamp(16px, 1.2vw, 20px);
+}
+
+/* ===== 設定エリア：高速スタック（縦並び）設定 ===== */
+.settings-container {
+  display: flex;
+  flex-direction: row;
+  gap: 25px;
+}
+
+/* 1400px以下（ほぼ全てのノートPC・縮めたウィンドウ）で即座に縦並び */
+@media (max-width: 1400px) {
+  .settings-container {
+    flex-direction: column;
+  }
+  .column-box {
+    width: 100% !important;
+  }
+}
+
+.column-box {
+  flex: 1;
+}
+
+/* ボタン：しっかりした押し心地 */
+.button {
+  font-family: 'DotGothic16', sans-serif;
+  border: 3px solid var(--pixel-dark-alpha) !important;
+  border-radius: 0 !important;
+  box-shadow: 4px 4px 0px var(--pixel-dark-alpha);
+  transition: all 0.1s;
+}
+
+.button:active {
+  box-shadow: 0px 0px 0px transparent;
+  transform: translate(3px, 3px);
+}
+
+.button.is-primary { background-color: var(--pixel-blue); color: #fff; }
+.button.is-success { background-color: var(--pixel-green); color: #fff; }
+
+/* テーブルの透明感 */
+.table {
+  background-color: rgba(255, 255, 255, 0.3);
+  border: 1px solid var(--pixel-dark-alpha);
+}
+.table thead th {
+  background: rgba(25, 76, 34, 0.15);
+  color: var(--pixel-dark-solid);
+  border-bottom: 3px solid var(--pixel-dark-alpha);
+}
+
+/* ガイド */
+.direction-guide {
+  border: 2px dashed var(--pixel-dark-alpha);
+  padding: 6px 15px;
+  background: rgba(255, 255, 255, 0.4);
+}
+
+.content ul.entry-list {
+  list-style: none;
+  padding-left: 0;
+  margin-left: 0;
+}
+
+/* ===== 入力フォーム（テキストボックス・プルダウン・チェックボックス）の修正 ===== */
+
+/* 基本の入力欄（テキスト・セレクト） */
+input[type="text"],
+input[type="password"],
+input[type="number"],
+select {
+  font-family: 'DotGothic16', sans-serif;
+  background-color: rgba(255, 255, 255, 0.4) !important;
+  border: 3px solid var(--pixel-dark-alpha) !important;
+  color: var(--pixel-dark-solid) !important;
+  border-radius: 0 !important;
+  padding: 8px 12px !important;
+  box-shadow: inset 3px 3px 0px rgba(0, 0, 0, 0.05);
+  transition: all 0.2s ease;
+  appearance: none;
+  /* テキストの埋もれ防止：高さを固定せずラインハイトで調整 */
+  line-height: 1.2 !important;
+  height: auto !important;
+  min-height: 2.5em;
+}
+
+/* プルダウン専用：テキストの位置と矢印の修正 */
+select {
+  padding-right: 30px !important;
+  /* 矢印をよりシンプルなドット三角に */
+  background-image: linear-gradient(var(--pixel-dark-solid), var(--pixel-dark-solid));
+  background-clip: content-box;
+  /* 矢印用の背景（右側の三角） */
+  background: url("data:image/svg+xml;charset=utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Cpath d='M0 0 L10 0 L5 7 Z' fill='%23194c22'/%3E%3C/svg%3E") no-repeat;
+  background-position: right 10px center;
+  background-size: 12px 12px;
+  cursor: pointer;
+  vertical-align: middle;
+}
+
+/* チェックボックスのビット調カスタム：これがないとチェックが映りません */
+/* ===== チェックボックスのカスタム（チェック時に赤くする） ===== */
+
+input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  
+  width: 24px !important;
+  height: 24px !important;
+  min-width: 24px;
+  
+  background-color: rgba(255, 255, 255, 0.4);
+  border: 3px solid var(--pixel-dark-alpha) !important;
+  border-radius: 0 !important;
+  
+  position: relative;
+  cursor: pointer;
+  vertical-align: middle;
+  margin: 0 8px 0 0 !important;
+  padding: 0 !important;
+  display: inline-block;
+  transition: background-color 0.1s; /* 色の変化を少し滑らかに */
+}
+
+/* チェックが入った時：背景を赤に変更 */
+input[type="checkbox"]:checked {
+  background-color: var(--pixel-red) !important; /* 緑から赤に変更 */
+  border-color: #8b0000 !important; /* 枠も少し濃い赤にして締める */
+}
+
+/* チェックマークのデザイン（白のレ点） */
+input[type="checkbox"]:checked::after {
+  content: "";
+  position: absolute;
+  left: 5px;
+  top: 1px;
+  width: 8px;
+  height: 14px;
+  border: solid white;
+  border-width: 0 4px 4px 0;
+  transform: rotate(45deg);
+}
+
+/* ホバー時は少し明るくして反応をわかりやすく */
+input[type="checkbox"]:hover {
+  background-color: rgba(255, 255, 255, 0.8);
+}
+
+input[type="checkbox"]:checked:hover {
+  background-color: #ff6b52 !important; /* チェック中のホバー色（明るい赤） */
+}
+
+/* チェックが入った時の状態：背景を緑にし、ドットの「レ点」を出す */
+input[type="checkbox"]:checked {
+  background-color: var(--pixel-green) !important;
+  border-color: var(--pixel-dark-solid) !important;
+}
+
+/* チェックマークのデザイン（擬似要素で描画） */
+input[type="checkbox"]:checked::after {
+  content: "";
+  position: absolute;
+  /* カクカクしたレ点を作るための設定 */
+  left: 5px;
+  top: 1px;
+  width: 8px;
+  height: 14px;
+  border: solid white;
+  border-width: 0 4px 4px 0; /* 太めの線でドット感を出す */
+  transform: rotate(45deg);
+}
+
+/* ラベルとの位置調整 */
+.checkbox {
+  display: inline-flex !important;
+  align-items: center;
+  font-family: 'DotGothic16', sans-serif;
+  color: var(--pixel-dark-solid);
+  cursor: pointer;
+  padding: 5px 0;
+}
+
+/* 警告点滅のアニメーション定義 */
+@keyframes pulse-red {
+  0% {
+    background-color: rgba(255, 75, 43, 0.4);
+    box-shadow: 8px 8px 0px rgba(255, 75, 43, 0.1);
+  }
+  50% {
+    background-color: rgba(255, 75, 43, 0.8); /* 濃くなる */
+    box-shadow: 0px 0px 20px rgba(255, 75, 43, 0.6); /* 光が溢れるような効果 */
+    border-color: #ff0000;
+  }
+  100% {
+    background-color: rgba(255, 75, 43, 0.4);
+    box-shadow: 8px 8px 0px rgba(255, 75, 43, 0.1);
+  }
+}
+
+/* 警告状態のスタイル（点滅を適用） */
+.is-alerting {
+  /* 2秒かけてゆっくり点滅を無限に繰り返す */
+  animation: pulse-red 2s infinite ease-in-out;
+  border-color: var(--pixel-red) !important;
+  transition: all 0.2s ease;
+}
+
+/* 警告状態の時は中のサブタイトル背景も強調 */
+.is-alerting .subtitle {
+  background: var(--pixel-red) !important;
+  box-shadow: 0 0 10px rgba(255, 255, 255, 0.5);
+}
+
+/* 警告状態のテーブル行 */
+tr.is-alerting td {
+  background-color: rgba(255, 75, 43, 0.2) !important;
+}
+
+/* テーブルの中のチェックボックスが埋もれないようにする */
+.table td .checkbox {
+  margin: 0;
+}
+
+
+/* ログイン画面用のボタン強調（少し大きく） */
+.login-card .button.is-primary {
+    font-size: 1.2rem;
+    height: 3.5rem;
+    background-color: var(--pixel-blue);
+}
+
+/* 入力欄の文字を中央寄せ（OPERATOR IDとかをかっこよく見せる） */
+.login-card input {
+    text-align: center;
+    letter-spacing: 2px;
+}
+
+/* ログイン画面のサブタイトル位置を微調整 */
+.login-card .subtitle {
+    display: block;
+    margin-bottom: 25px;
+}

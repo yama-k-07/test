@@ -1,0 +1,162 @@
+body {
+  font-family: sans-serif;
+  background: #42857b;
+  padding: 40px;
+  /* text-align: center; */
+}
+
+h1, h2 {
+  text-align: center;
+  font-weight: bold;
+  font-size: large;
+}
+
+.header {
+  background-color: #ddf4f5;
+  color: rgb(0, 0, 0);
+  padding: 1rem;
+  text-align: center;
+}
+
+.site-icon {
+  width: 330px;
+  height: 100px;
+}
+
+.footer {
+  background-color: #d9fcfd;
+  color: rgb(0, 0, 0);
+  text-align: center;
+  padding: 1rem;
+}
+
+.content ul.entry-list {
+  list-style: none;
+  padding-left: 0;
+  margin-left: 0;
+}
+
+.box {
+  background: #e8fffc;
+}
+
+.areacard{
+  background: #42857b;
+  color: #fff;
+}
+
+.button-container {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+  margin-bottom: 30px;
+}
+
+.button-wrapper {
+  position: relative;
+}
+
+.state-button {
+  padding: 50px 18px;
+  font-size: 14px;
+  color: white;
+  background: gray;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.state-button.selected {
+  outline: 3px solid black;
+}
+
+.dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  background: #42857b;
+  border: 1px solid #ccc;
+  border-radius: 5px;
+  width: 140px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+  display: none;
+  z-index: 10;
+}
+
+.dropdown div {
+  padding: 8px;
+  cursor: pointer;
+}
+
+.dropdown div:hover {
+  background-color: #eee;
+}
+
+.global-controls {
+  margin-top: 20px;
+}
+
+.global-controls button {
+  font-size: 14px;
+  margin: 0 8px;
+  padding: 8px 14px;
+  cursor: pointer;
+}
+
+
+.table-container {
+      display: flex;
+      justify-content: center;  /* 横中央 */
+      padding: 40px;            /* 余白追加 */
+    }
+    
+table,td,th {
+  border: solid 1px gray;
+  border-collapse: collapse;
+  padding: 5px 10px;
+} 
+th {
+  background-color: rgb(236, 255, 233);
+}
+
+/* ===== エリアカード横一列固定（完全版）===== */
+/* 親は flex で固定 */
+.area-board {
+  display: grid;
+  grid-template-columns: repeat(
+    auto-fit,
+    minmax(min(12.5%, 140px), 1fr)
+  );
+  gap: 1rem;
+  text-align: center;
+  justify-content: center;
+  /* grid-template-columns: repeat(8, 1fr); */
+}
+
+.area-card {
+  /* flex: 0 0 calc((100% - 7rem) / minmax(min(12.5%, 140px), 1fr)); */
+  min-width: 0;
+  font-size: clamp(5px, 1.2vw, 20px);
+  color: #fff;
+}
+.area-card h2 {
+  white-space: normal;
+  word-break: keep-all;     /* 単語途中で切らせない */
+  overflow-wrap: anywhere;  /* 必要なら行全体で折る */
+  text-align: center;
+  font-size: clamp(13px, 1.2vw, 15px);
+  font-weight: bold;
+  color: #fff;
+}
+
+.area-card label,
+.area-card .content,
+.area-card select {
+  font-size: clamp(5px, 1.2vw, 15px);
+  color: #fff;
+}
+
+.area-card strong {
+  color: #fff;
+}
