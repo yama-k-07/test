@@ -446,4 +446,5 @@ if __name__ == "__main__":
     watcher.start()
     watcher2 = threading.Thread(target=watch_area_file, daemon=True)
     watcher2.start()
-    app.run(host="0.0.0.0", port=5000, debug=False)
+    if __name__ == '__main__':
+        app.run(host="0.0.0.0", port=5000, debug=False)

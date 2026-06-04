@@ -1,1 +1,6 @@
 flask
+numpy
+pandas
+torch
+scipy
+scikit-learn
