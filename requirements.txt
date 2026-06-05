@@ -4,3 +4,5 @@ pandas
 torch
 scipy
 scikit-learn
+supabase
+requests
