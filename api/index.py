@@ -13,6 +13,10 @@ AREA_TABLE_PATH = "area_table.json"
 app = Flask(__name__)
 app.secret_key = 'mamotchi_secret_key_pixel' # セッション管理に必要
 
+#supabase API Key
+url = os.environ.get("SUPABASE_URL")
+key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+supabase: Client = create_client(url, key)
 
 # === テーブル定義（リストとして管理） ===
 # { デバイスID(8桁), area_id }
