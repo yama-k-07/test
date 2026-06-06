@@ -49,23 +49,9 @@ def load_ssid_table():
     global ssid_table
 
     try:
-        response = supabase.table("access_point").select("*").execute()
-        
-        # データが取得できなかった場合の防御策
-        if not response.data:
-            ssid_table = []
-        else:
-            # .get("キー名") にすると、もしキーが存在しなくてもエラーにならず None を返します
-            ssid_table = [
-                {
-                    "ssid": row.get("ssid", "Unknown"), 
-                    "password": row.get("password", "")
-                } 
-                for row in response.data
-            ]
-            
+        f = supabase.table("access_point").select("*").execute()
+        ssid_table = f.data
     except Exception as e:
-        print(f"Supabase Error: {e}")
         ssid_table = []
 
 
@@ -76,10 +62,10 @@ def save_ssid_table():
 
 def load_area_table():
     global area_table
-    if os.path.exists(AREA_TABLE_PATH):
-        with open(AREA_TABLE_PATH, 'r', encoding='utf-8') as f:
-            area_table = json.load(f)
-    else:
+    try:
+        f = supabase.table("area").select("*").execute()
+        area_table = f.data
+    except Exception as e:
         area_table = []
 
 def save_area_table():
