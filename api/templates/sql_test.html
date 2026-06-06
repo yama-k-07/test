@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Supabaseテストフォーム</title>
+    <style>
+        body { font-family: sans-serif; max-width: 400px; margin: 50px auto; padding: 20px; border: 1px solid #ccc; border-radius: 8px; }
+        .field { margin-bottom: 15px; }
+        label { display: block; margin-bottom: 5px; font-weight: bold; }
+        input[type="text"] { width: 100%; padding: 8px; box-sizing: border-box; }
+        button { width: 100%; padding: 10px; background: #0070f3; color: white; border: none; border-radius: 5px; cursor: pointer; }
+        button:hover { background: #0051a8; }
+        .msg { padding: 10px; margin-bottom: 15px; border-radius: 5px; }
+        .success { background: #e6fffa; color: #234e52; border: 1px solid #b2f5ea; }
+        .error { background: #fff5f5; color: #742a2a; border: 1px solid #fed7d7; }
+    </style>
+</head>
+<body>
+    <h2>Supabase 登録テスト</h2>
+    
+    {% if msg %}
+        <div class="msg {{ 'success' if '成功' in msg else 'error' }}">
+            {{ msg }}
+        </div>
+    {% endif %}
+
+    <form method="POST">
+        <div class="field">
+            <label>NAME</label>
+            <input type="text" name="name" placeholder="例: yama-k-07" required>
+        </div>
+        <button type="submit">Supabaseへ送信</button>
+    </form>
+</body>
+</html>
