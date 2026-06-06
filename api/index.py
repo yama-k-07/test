@@ -1,11 +1,11 @@
 import os
-from flask import Flask, jsonify, request
+from flask import Flask,render_template, jsonify, request
 from supabase import create_client, Client
 
 app = Flask(__name__)
 
 url = os.environ.get("SUPABASE_URL")
-key = os.environ.get("SUPABASE_ROLE_KEY")
+key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
 supabase: Client = create_client(url, key)
 
 @app.route('/api/test-form', methods=['GET', 'POST'])
