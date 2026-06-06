@@ -1,4 +1,5 @@
 from flask import Flask, request, jsonify, render_template, redirect, url_for, session
+from supabase import create_client, Client
 from functools import wraps
 import threading
 import json
