@@ -8,7 +8,7 @@ url = os.environ.get("SUPABASE_URL")
 key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
 supabase: Client = create_client(url, key)
 
-@app.route('/api/test-form', methods=['GET', 'POST'])
+@app.route('/api/test_form', methods=['GET', 'POST'])
 def test_form():
     msg = None
     
