@@ -1,12 +1,16 @@
 {
+  "builds": [
+    { "src": "index.py", "use": "@vercel/python" },
+    { "src": "test_form.py", "use": "@vercel/python" }
+  ],
   "rewrites": [
     {
-      "source": "/api/test_form",
-      "destination": "test_form.py"
+      "source": "/api/test-form",
+      "destination": "/test_form.py"
     },
     {
       "source": "/(.*)",
-      "destination": "index.py"
+      "destination": "/index.py"
     }
   ]
 }
