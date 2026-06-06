@@ -1,5 +1,6 @@
 {
     "rewrites": [
+      { "source": "/test_form", "destination": "/api/test_form.py" }
       { "source": "/(.*)", "destination": "/api/index.py" }
     ]
 }
