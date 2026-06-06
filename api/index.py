@@ -18,7 +18,7 @@ def test_form():
         
         try:
             # データを追加（インサート）
-            supabase.table("testing_table").insert({"name": data}).execute()
+            supabase.table("testing_table").insert({"value": data}).execute()
             msg = f"成功：【{data}】をSupabaseに追加しました！"
             
         except Exception as e:
