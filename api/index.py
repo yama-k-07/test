@@ -47,11 +47,10 @@ last_seen_dict = {}  # device_id -> UNIX timestamp
 # === SSIDテーブルの読み書き ===
 def load_ssid_table():
     global ssid_table
-    try:
-        f = supabase.table("access_point").select("*").execute()
-        #ssid_table = f.data
-    except Exception as e:
-        ssid_table = []
+
+    f = supabase.table("access_point").select("*").execute()
+
+
 
 def save_ssid_table():
     with open(SSID_TABLE_PATH, 'w', encoding='utf-8') as f:
