@@ -26,7 +26,7 @@ def add_data():
 
         # Supabaseのテーブルにデータを挿入
         # 'your_table_name' を実際のテーブル名に、'name' を実際のカラム名に変更してください
-        response = supabase.table("testing_table").insert({"value": name_value}).execute()
+        response = supabase.table("your_table_name").insert({"name": name_value}).execute()
 
         return jsonify({"message": "Success", "data": response.data}), 200
 
