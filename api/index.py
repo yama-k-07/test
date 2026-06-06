@@ -1,4 +1,5 @@
 from flask import Flask, request, jsonify, render_template, redirect, url_for, session
+from supabase import create_client, Client
 from functools import wraps
 import threading
 import json
@@ -11,6 +12,11 @@ AREA_TABLE_PATH = "area_table.json"
 
 app = Flask(__name__)
 app.secret_key = 'mamotchi_secret_key_pixel' # セッション管理に必要
+
+#supabase API Key
+url = os.environ.get("SUPABASE_URL")
+key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+supabase: Client = create_client(url, key)
 
 # === テーブル定義（リストとして管理） ===
 # { デバイスID(8桁), area_id }
@@ -41,10 +47,10 @@ last_seen_dict = {}  # device_id -> UNIX timestamp
 # === SSIDテーブルの読み書き ===
 def load_ssid_table():
     global ssid_table
-    if os.path.exists(SSID_TABLE_PATH):
-        with open(SSID_TABLE_PATH, 'r', encoding='utf-8') as f:
-            ssid_table = json.load(f)
-    else:
+    try:
+        f = supabase.table("access_point").select("*").execute()
+        ssid_table = json.load(f)
+    except Exception as e:
         ssid_table = []
 
 def save_ssid_table():
