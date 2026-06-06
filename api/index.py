@@ -26,4 +26,4 @@ def test_form():
             
     # 画面を表示する（GETのとき、およびPOSTのデータ追加が終わったあと）
     # api/templates/form.html を読み込んで、msgの文字を画面に渡します
-    return render_template("form.html", msg=msg)
+    return render_template("sql_test.html", msg=msg)
