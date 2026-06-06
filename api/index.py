@@ -48,7 +48,11 @@ last_seen_dict = {}  # device_id -> UNIX timestamp
 def load_ssid_table():
     global ssid_table
 
-    f = supabase.table("access_point").select("*").execute()
+    if os.path.exists(SSID_TABLE_PATH):
+        with open(SSID_TABLE_PATH, 'r', encoding='utf-8') as f:
+            ssid_table = json.load(f)
+    else:
+        ssid_table = []
 
 
 
