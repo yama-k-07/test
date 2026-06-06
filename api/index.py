@@ -49,10 +49,7 @@ def load_ssid_table():
     global ssid_table
     try:
         f = supabase.table("access_point").select("*").execute()
-        ssid_table = [
-            {"ssid": row["ssid"], "password": row["password"]} 
-            for row in f.data
-        ]
+        ssid_table = f.data
     except Exception as e:
         ssid_table = []
 
