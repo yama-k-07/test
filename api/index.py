@@ -73,13 +73,6 @@ def save_area_table():
         json.dump(area_table, f, ensure_ascii=False, indent=2)
 
 def load_area_order():
-    if os.path.exists(AREA_ORDER_PATH):
-        with open(AREA_ORDER_PATH, "r", encoding="utf-8") as f:
-            return json.load(f)
-    # 初期値：ssid_table の area_id 順
-    return [item["area_id"] for item in ssid_table]
-
-def load_area_order():
     try:
         f = supabase.table("area").select("area_id").execute()
         return f.data
