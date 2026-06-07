@@ -79,6 +79,14 @@ def load_area_order():
     # 初期値：ssid_table の area_id 順
     return [item["area_id"] for item in ssid_table]
 
+def load_area_order():
+    try:
+        f = supabase.table("area").select("area_id").execute()
+        return f.data
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
 
 def save_area_order(order):
     with open(AREA_ORDER_PATH, "w", encoding="utf-8") as f:
