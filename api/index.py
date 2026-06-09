@@ -84,9 +84,24 @@ def load_area_order():
 
 
 
+#def save_area_order(order):
+    #with open(AREA_ORDER_PATH, "w", encoding="utf-8") as f:
+     #   json.dump(order, f, ensure_ascii=False, indent=2)
 def save_area_order(order):
-    with open(AREA_ORDER_PATH, "w", encoding="utf-8") as f:
-        json.dump(order, f, ensure_ascii=False, indent=2)
+    try:
+        data = []
+        for i, area_id in enumerate(order):
+            data.append({
+                "area_id": area_id,
+                "sort_order": i
+            })
+
+        supabase.table("area_order").upsert(data).execute()
+
+        return {"status": "ok"}
+
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
 
 # --- ログインチェック用デコレータ ---
 def login_required(f):
