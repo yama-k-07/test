@@ -45,6 +45,7 @@ area_table = [{"area_id": "1", "gateway": "192.168.1.10"},
 last_seen_dict = {}  # device_id -> UNIX timestamp
 
 # === SSIDテーブルの読み書き ===
+#サーバーからssidとpasswordのデータを取ってくる処理
 def load_ssid_table():
     global ssid_table
 
@@ -54,12 +55,12 @@ def load_ssid_table():
     except Exception as e:
         ssid_table = []
 
-
-
+#デバイスにあるSSID_TABLEにファイル書き込み
 def save_ssid_table():
     with open(SSID_TABLE_PATH, 'w', encoding='utf-8') as f:
         json.dump(ssid_table, f, ensure_ascii=False, indent=2)
 
+#サーバーからAREA_IDとIPアドレスを取得
 def load_area_table():
     global area_table
     try:
@@ -68,10 +69,12 @@ def load_area_table():
     except Exception as e:
         area_table = []
 
+#デバイスにAREA_IDとIPアドレスを保存
 def save_area_table():
     with open(AREA_TABLE_PATH, 'w', encoding='utf-8') as f:
         json.dump(area_table, f, ensure_ascii=False, indent=2)
 
+#
 def load_area_order():
     try:
         f = supabase.table("area").select("area_id").execute()
