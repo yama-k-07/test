@@ -69,62 +69,26 @@ def load_area_table():
     except Exception as e:
         area_table = []
 
-#デバイスにAREA_IDとIPアドレスを保存
-#def save_area_table():
-    #with open(AREA_TABLE_PATH, 'w', encoding='utf-8') as f:
-     #   json.dump(area_table, f, ensure_ascii=False, indent=2)
-
-def save_area_table(area_table):
+#デバイスにAREA_IDとIPアドレスをSupabaseへ保存
+def save_area_table():
     try:
-        # area_table = [{"area_id": "area1", "ip": "192.168.0.1"}, ...]
         supabase.table("area").upsert(area_table).execute()
         return {"status": "ok"}
-
     except Exception as e:
         return {"status": "error", "message": str(e)}
-def load_area_table():
+
+def load_area_order():
     try:
-        f = supabase.table("area").select("*").execute()
+        f = supabase.table("area").select("area_id").execute()
         return f.data
-
     except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
+        return []
 
-#
 def save_area_order(order):
     try:
-        data = []
-        for i, area_id in enumerate(order):
-            data.append({
-                "area_id": area_id,
-                "sort_order": i
-            })
-
+        data = [{"area_id": area_id, "sort_order": i} for i, area_id in enumerate(order)]
         supabase.table("area_order").upsert(data).execute()
-
         return {"status": "ok"}
-
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-
-
-#def save_area_order(order):
-    #with open(AREA_ORDER_PATH, "w", encoding="utf-8") as f:
-     #   json.dump(order, f, ensure_ascii=False, indent=2)
-def save_area_order(order):
-    try:
-        data = []
-        for i, area_id in enumerate(order):
-            data.append({
-                "area_id": area_id,
-                "sort_order": i
-            })
-
-        supabase.table("area_order").upsert(data).execute()
-
-        return {"status": "ok"}
-
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
