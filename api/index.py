@@ -74,7 +74,6 @@ def save_area_table():
     with open(AREA_TABLE_PATH, 'w', encoding='utf-8') as f:
         json.dump(area_table, f, ensure_ascii=False, indent=2)
 
-#
 def load_area_order():
     try:
         f = supabase.table("area").select("area_id").execute()
