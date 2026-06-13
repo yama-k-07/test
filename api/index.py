@@ -251,21 +251,40 @@ def admin_wifi():
 @app.route('/api/area_status', methods=['POST', 'GET'])
 def handle_area_status():
     if request.method == 'POST':
-        # [{ area_id, 指示, 火災場所かどうか }, ...]
-        # POST前に必ずGETで現在のリスト全体を取得する必要有
-        data = request.json
-        if not isinstance(data, list):
-            return jsonify({'error': 'リスト形式でデータを送ってください'}), 400
+            data = request.json
+            if not isinstance(data, list):
+                return jsonify({'error': 'リスト形式でデータを送ってください'}), 400
 
-        for item in data:
-            if 'area_id' not in item:
-                return jsonify({'error': '各要素に area_id が必要です'}), 400
-            update_or_append(area_status_table, 'area_id', item)
+            # 送られてきたデータの中に area_id があるか事前にチェック
+            for item in data:
+                if 'area_id' not in item:
+                    return jsonify({'error': '各要素に area_id が必要です'}), 400
 
-        return jsonify({'message': 'area status updated', 'area_status': area_status_table})
+            try:
+                # 💡 ポイント：Supabaseの「upsert（アップサート）」機能を使います！
+                # これを使うと、すでに同じ area_id があれば自動上書き、なければ新規追加を1発でやってくれます。
+                # ※事前にSupabase側で area_id を「主キー（Primary Key）」に設定しておく必要があります。
+                response = supabase.table(status_table).upsert(data).execute()
+                
+                return jsonify({
+                    'message': 'area status updated in Supabase', 
+                    'area_status': response.data
+                })
+                
+            except Exception as e:
+                return jsonify({'error': f'Supabaseの更新に失敗しました: {str(e)}'}), 500
 
     else:
-        return jsonify(area_status_table)
+        try:
+            # 💡 ポイント：Supabaseから全データを取得（SELECT *）します
+            response = supabase.table(status_table).select("*").execute()
+            
+            # 取得したデータ（リスト形式）をそのままJSONで返します
+            return jsonify(response.data)
+            
+        except Exception as e:
+            return jsonify({'error': f'Supabaseからのデータ取得に失敗しました: {str(e)}'}), 500
+
 
 # === SSID設定の更新・取得 ===
 # POSTはjs側からアクセス(GETは使わない)

@@ -1,5 +1,9 @@
-テスト用
+## 
+requirements.txt はpythonで必要なライブラリを記述 <br>
+vercel.json はルーティング制御などを記述 <br>
 
 
-requirements.txt はpythonで必要なライブラリを書くらしいです
-vercel.json はルーティング制御などを記述するらしいです。
+## 参考資料
+supabase_APIの操作方法 <br>
+https://note.com/python_lab/n/n308275095a3c
+
