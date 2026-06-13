@@ -17,6 +17,7 @@ supabase: Client = create_client(url, key)
 TABLE_ACCESS_POINT = "access_point"
 TABLE_AREA = "area"
 TABLE_AREA_STATUS = "area_statuses"
+TABLE_AREA_ORDER = "area_order"
 
 entry_status_table = []
 last_seen_dict = {}
@@ -40,6 +41,16 @@ def load_area_table():
         return response.data
     except Exception as e:
         print(f"Error loading area table: {e}")
+        return []
+
+
+def load_area_order():
+    """専用の順序テーブルからデータを取得"""
+    try:
+        response = supabase.table(TABLE_AREA_ORDER).select("area_id").order("sort_order", ascending=True).execute()
+        return response.data
+    except Exception as e:
+        print(f"Error loading area order: {e}")
         return []
 
 
@@ -207,6 +218,20 @@ def delete_area():
     except Exception as e:
         return jsonify({'error': f'Supabaseからの削除に失敗しました: {str(e)}'}), 500
     
+
+@app.route("/api/area_order", methods=["GET", "POST"])
+def handle_area_order():
+    if request.method == "POST":
+        data = request.json  # 画面側から送られてきた順序データ（リスト、またはオブジェクト）
+        try:
+            # そのままSupabaseの順序テーブルに upsert（上書き保存）
+            supabase.table(TABLE_AREA_ORDER).upsert(data).execute()
+            return jsonify({"message": "area order saved in Supabase", "order": data})
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+    else:
+        return jsonify(load_area_order())
+
 
 
 
