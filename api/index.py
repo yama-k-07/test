@@ -236,5 +236,26 @@ def handle_area_order():
 
 
 
+
+@app.route('/api/entry_status', methods=['GET'])
+def get_entry_status():
+    global entry_status_table
+    now = time.time()
+    timeout_sec = 60
+
+    # 1分以内に定期連絡（alive_check）があったデバイスIDだけを有効とする
+    valid_ids = {
+        device_id for device_id, last_seen in last_seen_dict.items()
+        if now - last_seen <= timeout_sec
+    }
+    
+    # 有効なデバイスの生存データだけをリストにして画面に返却
+    active_entries = [
+        entry for entry in entry_status_table
+        if entry['device_id'] in valid_ids
+    ]
+    return jsonify(active_entries)
+
+
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=5000, debug=False)
