@@ -1,38 +1,422 @@
-import os
-import time
-import json
-from functools import wraps
 from flask import Flask, request, jsonify, render_template, redirect, url_for, session
 from supabase import create_client, Client
+from functools import wraps
+import threading
+import json
+import os
+import time
 
-app = Flask(__name__, template_folder='templates')
-app.secret_key = os.environ.get("FLASK_SECRET_KEY", "mamotchi_secret_key_pixel")
+SSID_TABLE_PATH = "ssid_table.json"
+AREA_ORDER_PATH = "area_order.json"
+AREA_TABLE_PATH = "area_table.json"
 
-# ==========================================
-# 🛠️ Supabase 初期化設定
-# ==========================================
-url = os.environ.get("NEXT_PUBLIC_SUPABASE_URL") or os.environ.get("SUPABASE_URL")
-key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("SUPABASE_ROLE_KEY") or os.environ.get("NEXT_PUBLIC_SUPABASE_ANON_KEY")
+app = Flask(__name__)
+app.secret_key = 'mamotchi_secret_key_pixel' # セッション管理に必要
+
+#supabase API Key
+url = os.environ.get("SUPABASE_URL")
+key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
 supabase: Client = create_client(url, key)
 
-# Supabase上の実際のテーブル名（環境に合わせて変更してください）
-TABLE_ACCESS_POINT = "access_point"
-TABLE_AREA = "area"
-TABLE_AREA_STATUS = "area_statuses"  # 👈 前回の typo (status_table) を修正
+# === テーブル定義（リストとして管理） ===
+# { デバイスID(8桁), area_id }
+entry_status_table = [{"device_id": "gfaghear", "area_id": "1", "username": "AA"},
+                      {"device_id": "areageag", "area_id": "2", "username": "BB"},
+                      {"device_id": "bgfehtre", "area_id": "2", "username": "CC"},
+                      {"device_id": "qgrgaadf", "area_id": "1", "username": "DD"}]
 
-# ==========================================
-# 💾 ローカルキャッシュ＆状態管理
-# ==========================================
-# リアルタイムで頻繁にアクセスされる一時データはメモリ上で管理します
-entry_status_table = []
+# { エリアID, 指示(waiting か evacuate_exit か evacuate_upwind / none(正常時) / alert(通報通知時)), 通報元(火災場所)かどうか }
+# リスト順序を配置に用いる, area_idはssidの関連付けのみに使う
+area_status_table = [{"area_id": "1", "instruction": "evacuate_exit", "fire": False},
+                     {"area_id": "2", "instruction": "waiting",       "fire": True}]
+
+# { エリアID, SSID, パスワード }
+# area_idの特定に使う
+# アクセスポイントリストに変換して使う
+# ssid_table = [{"area_id": "1", "ssid": "Ando", "password": "dsno3946"},
+#               {"area_id": "2", "ssid": "k",    "password": "rancer454545"}]
+ssid_table = [{"ssid": "Ando", "password": "dsno3946"},
+              {"ssid": "k",    "password": "rancer454545"}]
+
+area_table = [{"area_id": "1", "gateway": "192.168.1.10"},
+              {"area_id": "2", "gateway": "192.168.1.11"}]
+
+# === デバイスごとの最終アクセス時刻 ===
 last_seen_dict = {}  # device_id -> UNIX timestamp
 
+# === SSIDテーブルの読み書き ===
+#サーバーからssidとpasswordのデータを取ってくる処理
+def load_ssid_table():
+    global ssid_table
+
+    try:
+        f = supabase.table("access_point").select("*").execute()
+        ssid_table = f.data
+    except Exception as e:
+        ssid_table = []
+
+#デバイスにあるSSID_TABLEにファイル書き込み
+def save_ssid_table():
+    with open(SSID_TABLE_PATH, 'w', encoding='utf-8') as f:
+        json.dump(ssid_table, f, ensure_ascii=False, indent=2)
+
+#サーバーからAREA_IDとIPアドレスを取得
+def load_area_table():
+    global area_table
+    try:
+        f = supabase.table("area").select("*").execute()
+        area_table = f.data
+    except Exception as e:
+        area_table = []
+
+#デバイスにAREA_IDとIPアドレスを保存
+def save_area_table():
+    with open(AREA_TABLE_PATH, 'w', encoding='utf-8') as f:
+        json.dump(area_table, f, ensure_ascii=False, indent=2)
+
+def load_area_order():
+    try:
+        f = supabase.table("area").select("area_id").execute()
+        return f.data
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+
+def save_area_order(order):
+    with open(AREA_ORDER_PATH, "w", encoding="utf-8") as f:
+        json.dump(order, f, ensure_ascii=False, indent=2)
+
+# --- ログインチェック用デコレータ ---
+def login_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if not session.get('logged_in'):
+            return redirect(url_for('login_page'))
+        return f(*args, **kwargs)
+    return decorated_function
+
+# ファイル変更監視用
+def watch_ssid_file(poll_interval=1.0):
+    last_mtime = None
+    while True:
+        try:
+            if os.path.exists(SSID_TABLE_PATH):
+                mtime = os.path.getmtime(SSID_TABLE_PATH)
+                if last_mtime is None:
+                    last_mtime = mtime
+                elif mtime != last_mtime:
+                    last_mtime = mtime
+                    # 外部でファイルが書き換えられたら再読込
+                    load_ssid_table()
+                    # area_status_table を ssid_table に合わせて更新
+                    # global area_status_table
+                    # area_status_table = [
+                    #     {"area_id": ssid_item["area_id"], "instruction": "none", "fire": False}
+                    #     for ssid_item in ssid_table
+                    # ]
+        except Exception:
+            pass
+        time.sleep(poll_interval)
+
+def watch_area_file(poll_interval=1.0):
+    last_mtime = None
+    while True:
+        try:
+            if os.path.exists(AREA_TABLE_PATH):
+                mtime = os.path.getmtime(AREA_TABLE_PATH)
+                if last_mtime is None:
+                    last_mtime = mtime
+                elif mtime != last_mtime:
+                    last_mtime = mtime
+                    # 外部でファイルが書き換えられたら再読込
+                    load_area_table()
+                    # area_status_table を ssid_table に合わせて更新
+                    global area_status_table
+                    area_status_table = [
+                        {"area_id": area_item["area_id"], "instruction": "none", "fire": False}
+                        for area_item in area_table
+                    ]
+        except Exception:
+            pass
+        time.sleep(poll_interval)
+
+# === SSID -> password の辞書を生成 ===
+def get_wifi_credentials():
+    return {
+        item["ssid"]: item["password"]
+        for item in ssid_table
+        if "ssid" in item and "password" in item
+    }
+
+# === 汎用ユーティリティ ===
+# 同一SSIDがリスト内にあればそのパスワードとエリアIDを上書きする関数
+def update_or_append(table, key_field, new_item):
+    for i, item in enumerate(table):
+        if item.get(key_field) == new_item.get(key_field):
+            table[i] = new_item
+            return
+    table.append(new_item)
+    
+def reset_all_instructions():
+    for area in area_status_table:
+        area['instruction'] = 'none'
+        area['fire'] = False
+
+
+# 起動時に SSID テーブルをロード
+load_ssid_table()
+load_area_order()
+load_area_table()
+entry_status_table = []
+
+# area_status_table を area_table の area_id に基づいて初期化
+area_status_table = [
+    {"area_id": area_item["area_id"], "instruction": "none", "fire": False}
+    for area_item in area_table
+]
+
+# --- 既存のインポートの下に追加 ---
+# login.htmlを表示するためのルート
+@app.route("/")
+def login_page():
+    if session.get('logged_in'):
+        return redirect(url_for('index'))
+    return render_template("login.html")
+
+@app.route("/index")
+@login_required # これをつけるだけで未ログインを弾く
+def index():
+    return render_template("index.html")
+
+@app.route("/api/login_mock", methods=["POST"])
+def login_mock():
+    # ハリボテ認証：セッションに記録
+    session['logged_in'] = True
+    return jsonify({"status": "success", "redirect": url_for("index")})
+
+@app.route("/logout")
+def logout():
+    session.pop('logged_in', None)
+    return redirect(url_for('login_page'))
+
+# === トップページ ===
+# @app.route("/index", methods=["GET", "POST"])
+# def index():
+#     return render_template("index.html")
+
+# @app.route("/")
+# def admin_page():
+#     redirect(url_for("index"))
+
+
+# # ログインボタンを押した後の遷移先（ハリボテなのでそのまま管理画面へ）
+# @app.route("/api/login_mock", methods=["POST"])
+# def login_mock():
+#     # 本来はここで認証しますが、今回は即座にOKを返します
+#     return jsonify({"status": "success", "redirect": url_for("index")})
+
+
+# === 管理者ページ：WiFi設定 ===
+@app.route("/chkwifi", methods=["GET", "POST"])
+def admin_wifi():
+    # テスト用アクセスポイントの登録
+    if request.method == "POST":
+        ssid = request.form.get("ssid")
+        password = request.form.get("password")
+        if ssid and password:
+            new_entry = {
+                "area_id": "any",  # エリアIDが未指定のとき用
+                "ssid": ssid,
+                "password": password
+            }
+            update_or_append(ssid_table, "ssid", new_entry)
+            save_ssid_table()
+        return redirect(url_for("admin_wifi"))
+
+    wifi_data = get_wifi_credentials()
+    return render_template("wifi.html", wifi_data=wifi_data)
+
+
+
+# @app.route("/")
+# def admin_page():
+#     return render_template("admin.html")
+
+
+# 以下すべてAPI定義部
+# === エリア状態の更新・取得 ===
+# POSTはjs側からアクセス(GETは使わない)
+# 順序変更のためリスト全体を入力する形式
+@app.route('/api/area_status', methods=['POST', 'GET'])
+def handle_area_status():
+    if request.method == 'POST':
+        data = request.json
+        if not isinstance(data, list):
+            return jsonify({'error': 'リスト形式でデータを送ってください'}), 400
+
+        # 送られてきたデータの中に area_id があるか事前にチェック
+        for item in data:
+            if 'area_id' not in item:
+                return jsonify({'error': '各要素に area_id が必要です'}), 400
+
+        try:
+            # 💡 ポイント：Supabaseの「upsert（アップサート）」機能を使います！
+            # これを使うと、すでに同じ area_id があれば自動上書き、なければ新規追加を1発でやってくれます。
+            # ※事前にSupabase側で area_id を「主キー（Primary Key）」に設定しておく必要があります。
+            response = supabase.table(status_table).upsert(data).execute()
+            
+            return jsonify({
+                'message': 'area status updated in Supabase', 
+                'area_status': response.data
+            })
+            
+        except Exception as e:
+            return jsonify({'error': f'Supabaseの更新に失敗しました: {str(e)}'}), 500
+
+    else:
+        try:
+            # 💡 ポイント：Supabaseから全データを取得（SELECT *）します
+            response = supabase.table(status_table).select("*").execute()
+            
+            # 取得したデータ（リスト形式）をそのままJSONで返します
+            return jsonify(response.data)
+            
+        except Exception as e:
+            return jsonify({'error': f'Supabaseからのデータ取得に失敗しました: {str(e)}'}), 500
+
+
+# === SSID設定の更新・取得 ===
+# POSTはjs側からアクセス(GETは使わない)
+# エリアごとにアクセスポイントを割り振りする目的
+# 1つずつ要素を入れる形式
+@app.route('/api/ssid', methods=['POST', 'GET'])
+def handle_ssid():
+    if request.method == 'POST':
+        # { ssid, password }
+        data = request.json
+        if 'ssid' not in data:
+            return jsonify({'error': 'ssidが必要です'}), 400
+
+        # 1. SSIDテーブル更新
+        update_or_append(ssid_table, 'ssid', data)
+        save_ssid_table()
+
+        return jsonify({'message': 'SSID table updated', 'ssid_table': ssid_table})
+    else:
+        return jsonify(ssid_table)
+
+
+@app.route('/api/ssid', methods=['DELETE'])
+def delete_ssid():
+    # body: { ssid }
+    data = request.json or {}
+    target_ssid = data.get('ssid')
+    removed = False
+    if target_ssid:
+        new_table = [item for item in ssid_table if item.get('ssid') != target_ssid]
+        if len(new_table) != len(ssid_table):
+            removed = True
+            ssid_table[:] = new_table
+    else:
+        return jsonify({'error': 'ssid を指定してください'}), 400
+
+    if removed:
+        save_ssid_table()
+        return jsonify({'message': 'deleted', 'ssid_table': ssid_table})
+    else:
+        return jsonify({'error': '該当するエントリが見つかりませんでした'}), 404
+
+@app.route('/api/area', methods=['POST', 'GET'])
+def handle_area():
+    if request.method == 'POST':
+        # { area_id, gateway }
+        data = request.json
+        if 'area_id' not in data:
+            return jsonify({'error': 'area_idが必要です'}), 400
+
+        # 1. SSIDテーブル更新
+        update_or_append(area_table, 'area_id', data)
+        save_area_table()
+
+        # 2. area_status_table に area_id がなければ追加
+        existing_area = next((item for item in area_status_table if item['area_id'] == data['area_id']), None)
+        if not existing_area:
+            area_status_table.append({
+                "area_id": data['area_id'],
+                "instruction": "none",
+                "fire": False
+            })
+
+        return jsonify({'message': 'area table updated', 'area_table': area_table})
+    else:
+        return jsonify(area_table)
+
+@app.route('/api/area', methods=['DELETE'])
+def delete_area():
+    # body: { area_id }
+    data = request.json or {}
+    target_area = data.get('area_id')
+    removed = False
+    if target_area:
+        new_table = [item for item in area_table if item.get('area_id') != target_area]
+        if len(new_table) != len(area_table):
+            removed = True
+            area_table[:] = new_table
+    else:
+        return jsonify({'error': 'area_id を指定してください'}), 400
+    if removed:
+        save_area_table()
+        return jsonify({'message': 'deleted', 'area_table': area_table})
+    else:
+        return jsonify({'error': '該当するエントリが見つかりませんでした'}), 404
+
+@app.route("/api/area_order", methods=["GET", "POST"])
+def handle_area_order():
+    if request.method == "POST":
+        data = request.json
+        if not isinstance(data, list):
+            return jsonify({"error": "list形式で送信してください"}), 400
+
+        # area_id のみ許可
+        valid_ids = {item["area_id"] for item in area_status_table}
+        filtered = [aid for aid in data if aid in valid_ids]
+
+        save_area_order(filtered)
+        return jsonify({"message": "area order saved", "order": filtered})
+
+    else:
+        return jsonify(load_area_order())
+
+    
+# === APリストの取得 ===from flask import Flask, request, jsonify, render_template, redirect, url_for, session
+from supabase import create_client, Client
+from functools import wraps
+import threading
+import json
+import os
+import time
+
+app = Flask(__name__)
+app.secret_key = 'mamotchi_secret_key_pixel'
+
+#supabase API Key
+url = os.environ.get("SUPABASE_URL")
+key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+supabase: Client = create_client(url, key)
+
+TABLE_ACCESS_POINT = "access_point"
+TABLE_AREA = "area"
+TABLE_AREA_STATUS = "area_statuses"
+
+entry_status_table = []
+last_seen_dict = {}
+
 # ==========================================
-# 🔄 Supabase 連携データ処理関数
+#  Supabase 連携データ処理関数
 # ==========================================
 
 def load_ssid_table():
-    """Supabaseからアクセスポイント（Wi-Fi）一覧を取得"""
     try:
         response = supabase.table(TABLE_ACCESS_POINT).select("*").execute()
         return response.data
@@ -40,14 +424,15 @@ def load_ssid_table():
         print(f"Error loading SSID table: {e}")
         return []
 
+
 def load_area_table():
-    """Supabaseからエリア＆ゲートウェイ一覧を取得"""
     try:
         response = supabase.table(TABLE_AREA).select("*").execute()
         return response.data
     except Exception as e:
         print(f"Error loading area table: {e}")
         return []
+
 
 def get_wifi_credentials():
     """SSIDとパスワードの辞書（マイコン用）を生成"""
@@ -58,6 +443,8 @@ def get_wifi_credentials():
         if "ssid" in item and "password" in item
     }
 
+
+#いる?
 def update_or_append(table, key_field, new_item):
     """ローカルリスト用の汎用更新関数"""
     for i, item in enumerate(table):
@@ -66,8 +453,9 @@ def update_or_append(table, key_field, new_item):
             return
     table.append(new_item)
 
+
 # ==========================================
-# 🔐 認証用デコレータ
+#  認証用デコレータ
 # ==========================================
 def login_required(f):
     @wraps(f)
@@ -77,9 +465,6 @@ def login_required(f):
         return f(*args, **kwargs)
     return decorated_function
 
-# ==========================================
-# 🌐 画面表示・認証ルート定義
-# ==========================================
 
 @app.route("/")
 def login_page():
@@ -87,20 +472,24 @@ def login_page():
         return redirect(url_for('index'))
     return render_template("login.html")
 
+
 @app.route("/index")
 @login_required
 def index():
     return render_template("index.html")
+
 
 @app.route("/api/login_mock", methods=["POST"])
 def login_mock():
     session['logged_in'] = True
     return jsonify({"status": "success", "redirect": url_for("index")})
 
+
 @app.route("/logout")
 def logout():
     session.pop('logged_in', None)
     return redirect(url_for('login_page'))
+
 
 @app.route("/chkwifi", methods=["GET", "POST"])
 @login_required
@@ -111,7 +500,6 @@ def admin_wifi():
         if ssid and password:
             new_entry = {"area_id": "any", "ssid": ssid, "password": password}
             try:
-                # Web画面からの新しいWi-Fi登録も、直接Supabaseへupsert（自動上書き/追加）
                 supabase.table(TABLE_ACCESS_POINT).upsert(new_entry).execute()
             except Exception as e:
                 print(f"Error saving Wi-Fi to Supabase: {e}")
@@ -120,11 +508,10 @@ def admin_wifi():
     wifi_data = get_wifi_credentials()
     return render_template("wifi.html", wifi_data=wifi_data)
 
-# ==========================================
-# 🔌 API定義部（JavaScript ＆ マイコン向け）
-# ==========================================
 
-# --- エリア状態の更新・取得 (JS/管理者画面用) ---
+
+# API
+
 @app.route('/api/area_status', methods=['POST', 'GET'])
 def handle_area_status():
     if request.method == 'POST':
@@ -137,7 +524,6 @@ def handle_area_status():
                 return jsonify({'error': '各要素に area_id が必要です'}), 400
 
         try:
-            # 修正：変数 typos を直し、直接Supabaseにupsert
             response = supabase.table(TABLE_AREA_STATUS).upsert(data).execute()
             return jsonify({
                 'message': 'area status updated in Supabase', 
@@ -145,17 +531,14 @@ def handle_area_status():
             })
         except Exception as e:
             return jsonify({'error': f'Supabaseの更新に失敗しました: {str(e)}'}), 500
-
     else:
         try:
-            # 直接Supabaseから最新のエリア火災状況・避難指示を取得
             response = supabase.table(TABLE_AREA_STATUS).select("*").execute()
             return jsonify(response.data)
         except Exception as e:
             return jsonify({'error': f'Supabaseからのデータ取得に失敗しました: {str(e)}'}), 500
 
 
-# --- SSID（アクセスポイント）個別操作用 ---
 @app.route('/api/ssid', methods=['POST', 'GET'])
 def handle_ssid():
     if request.method == 'POST':
@@ -169,9 +552,23 @@ def handle_ssid():
             return jsonify({'error': str(e)}), 500
     else:
         return jsonify(load_ssid_table())
+    
+
+@app.route('/api/ssid', methods=['DELETE'])
+def delete_ssid():
+    data = request.json or {}
+    target_ssid = data.get('ssid')
+    if not target_ssid:
+        return jsonify({'error': 'ssid を指定してください'}), 400
+
+    try:
+        # Supabaseのテーブルから、該当するSSIDの行を削除
+        supabase.table(TABLE_ACCESS_POINT).delete().eq("ssid", target_ssid).execute()
+        return jsonify({'message': 'deleted from Supabase', 'ssid_table': load_ssid_table()})
+    except Exception as e:
+        return jsonify({'error': f'Supabaseからの削除に失敗しました: {str(e)}'}), 500
 
 
-# --- エリア定義マスタの操作用 ---
 @app.route('/api/area', methods=['POST', 'GET'])
 def handle_area():
     if request.method == 'POST':
@@ -185,25 +582,45 @@ def handle_area():
             return jsonify({'error': str(e)}), 500
     else:
         return jsonify(load_area_table())
+    
+
+@app.route('/api/area', methods=['DELETE'])
+def delete_area():
+    data = request.json or {}
+    target_area = data.get('area_id')
+    if not target_area:
+        return jsonify({'error': 'area_id を指定してください'}), 400
+
+    try:
+        # Supabaseのテーブルから、該当するarea_idの行を削除
+        supabase.table(TABLE_AREA).delete().eq("area_id", target_area).execute()
+        return jsonify({'message': 'deleted from Supabase', 'area_table': load_area_table()})
+    except Exception as e:
+        return jsonify({'error': f'Supabaseからの削除に失敗しました: {str(e)}'}), 500
+    
 
 
-# --- マイコン（Pico等）用：Wi-Fi一覧取得 ---
+
+
+if __name__ == '__main__':
+    app.run(host="0.0.0.0", port=5000, debug=False)
+# マイコン側からアクセス
 @app.route("/api/wifi_list", methods=["GET"])
 def get_wifi_list():
     return jsonify(get_wifi_credentials())
 
-
-# --- 入退場状態の取得（1分間応答がないデバイスを除外） ---
+# === エントリ状態の取得（1分間応答がないデバイスを除外） ===
 @app.route('/api/entry_status', methods=['GET'])
 def get_entry_status():
-    global entry_status_table
     now = time.time()
     timeout_sec = 60
 
     valid_ids = {
-        device_id for device_id, last_seen in last_seen_dict.items()
+        device_id
+        for device_id, last_seen in last_seen_dict.items()
         if now - last_seen <= timeout_sec
     }
+
     active_entries = [
         entry for entry in entry_status_table
         if entry['device_id'] in valid_ids
@@ -211,66 +628,69 @@ def get_entry_status():
     return jsonify(active_entries)
 
 
-# --- マイコン用：生存確認 ＆ 火災通報 ＆ 避難指示取得 ---
+# === 入場状態の更新，指示の送信・取得 ===
+# マイコン側からアクセス(レスポンスでエリアIDと指示内容)
+# 1つずつ要素を入れる形式
 @app.route('/api/alive_check', methods=['POST', 'GET'])
 def handle_entry():
-    global entry_status_table
     if request.method == 'POST':
+        # { device_id, ssid, gateway, 通報の有無(True/False), username }
         data = request.json
-        if not data or 'device_id' not in data or 'gateway' not in data or 'report' not in data:
-            return jsonify({'error': 'device_id, gateway, reportが必要です'}), 400
+        if 'device_id' not in data or 'ssid' not in data or 'report' not in data or 'gateway' not in data:
+            return jsonify({'error': 'device_id, ssid, gateway, reportが必要です'}), 400
 
-        # 1. gateway（IP）から所属area_idを判定
-        area_table_data = load_area_table()
-        matched_area = next((item for item in area_table_data if item['gateway'] == data['gateway']), None)
+        # 1. gatewayからarea_idを導出
+        matched_area = next((item for item in area_table if item['gateway'] == data['gateway']), None)
         if not matched_area:
-            return jsonify({'error': '該当するゲートウェイエリアが見つかりません'}), 404
+            print('該当するSSIDが見つかりません')
+            return jsonify({'error': '該当するSSIDが見つかりません'}), 404
         area_id = matched_area['area_id']
 
-        # 2. メモリ上の生存リストを更新
-        username = data.get('username', 'Unknown')
-        new_entry = {'device_id': data['device_id'], 'area_id': area_id, 'username': username}
+        # 2. entry_status_tableの更新（device_idで上書き or 追加, keyは"report"）
+        new_entry = {'device_id': data['device_id'], 'area_id': area_id, 'username': data['username']}
         update_or_append(entry_status_table, 'device_id', new_entry)
+        
+        # 最終アクセス時刻を記録
         last_seen_dict[data['device_id']] = time.time()
 
-        # 3. ボタン等で「火災通報（report=True）」された場合のSupabase処理
+        # 3. 通報がTrueならエリア状態を更新
         if data['report'] is True:
-            try:
-                # 3-1. まず現在の全エリア状況をSupabaseから引っ張る
-                current_status = supabase.table(TABLE_AREA_STATUS).select("*").execute().data
-                
-                # 3-2. 全エリアを一斉に「alert（通報通知）」にし、通報元のarea_idだけ「fire=True」に書き換える
-                for area in current_status:
-                    area['instruction'] = 'alert'
-                    if area['area_id'] == area_id:
-                        area['fire'] = True
-                
-                # 3-3. まとめてSupabaseへupsert
-                supabase.table(TABLE_AREA_STATUS).upsert(current_status).execute()
-            except Exception as e:
-                print(f"Error handling emergency report in Supabase: {e}")
+            # 全エリアの指示を alert に
+            for area in area_status_table:
+                area['instruction'] = 'alert'
+            # 該当エリアのfireをTrueに
+            matched_area_status = next((item for item in area_status_table if item['area_id'] == area_id), None)
+            if matched_area_status:
+                matched_area_status['fire'] = True
+        # else:
+        #     matched_area_status = next((item for item in area_status_table if item['area_id'] == area_id), None)
+        #     if matched_area_status:
+        #         matched_area_status['instruction'] = "waiting"
+            
 
-        # 4. マイコンへ返すために、現在の該当エリアの「避難指示内容」をSupabaseから取得
-        try:
-            status_response = supabase.table(TABLE_AREA_STATUS).select("instruction").eq("area_id", area_id).execute()
-            if status_response.data:
-                instruction = status_response.data[0]['instruction']
-            else:
-                instruction = 'none'
-        except Exception:
-            instruction = 'none'
+        # 4. area_status_tableから指示内容を取得
+        matched_area_status = next((item for item in area_status_table if item['area_id'] == area_id), None)
+        instruction = matched_area_status['instruction'] if matched_area_status else 'none'
+        
+        print(area_id, data['username'], f"\n通報：{data['report']}")
 
-        print(f"Area: {area_id}, User: {username}, Report: {data['report']}, Instruction: {instruction}")
-
+        # 5. area_idと指示内容を返す
         return jsonify({
             'area_id': area_id,
             'instruction': instruction
         })
+
     else:
-        # GET時はメモリ内の生存一覧を返却
-        return get_entry_status()
+        # GET: 現在のエントリ状態を返す
+        return jsonify(entry_status_table)
 
 
-if __name__ == '__main__':
-    # ローカル検証用 (Vercelデプロイ時はここは無視され、上のappオブジェクトが自動的に呼ばれます)
-    app.run(host="0.0.0.0", port=5000, debug=False)
+if __name__ == "__main__":
+    # SSIDファイル監視スレッドを起動
+    watcher = threading.Thread(target=watch_ssid_file, daemon=True)
+    watcher.start()
+    watcher2 = threading.Thread(target=watch_area_file, daemon=True)
+    watcher2.start()
+    if __name__ == '__main__':
+        app.run(host="0.0.0.0", port=5000, debug=False)
+
