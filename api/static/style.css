@@ -434,10 +434,37 @@ tr.is-alerting td {
 }
 
 .inner-box {
+  position: relative;
   height: 400px;
   background: rgba(255, 255, 255, 0.3);
   border: 15px solid var(--pixel-dark-alpha);
   box-shadow: 4px 4px 0px rgba(25, 76, 34, 0.1);
   padding: 15px;
   margin-top: 12px;
+}
+
+
+
+.Area1 {
+  position: absolute;
+  top: 10px;
+  /* 上から10px */
+  left: 20px;
+  /* 左から20px */
+}
+
+.Area2 {
+  position: absolute;
+  top: 10px;
+  /* 上から10px */
+  left: 60px;
+  /* 左から20px */
+}
+
+.Area3 {
+  position: absolute;
+  top: 10px;
+  /* 上から10px */
+  left: 110px;
+  /* 左から20px */
 }
