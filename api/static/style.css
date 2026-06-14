@@ -457,7 +457,7 @@ tr.is-alerting td {
   position: absolute;
   top: 10px;
   /* 上から10px */
-  left: 60px;
+  left: 250px;
   /* 左から20px */
 }
 
@@ -465,6 +465,6 @@ tr.is-alerting td {
   position: absolute;
   top: 10px;
   /* 上から10px */
-  left: 110px;
+  left: 500px;
   /* 左から20px */
 }
