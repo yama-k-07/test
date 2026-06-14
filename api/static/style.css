@@ -435,8 +435,8 @@ tr.is-alerting td {
 
 .inner-box {
   background: rgba(255, 255, 255, 0.3);
-  border: 3px solid var(--pixel-dark-alpha);
+  border: 15px solid var(--pixel-dark-alpha);
   box-shadow: 4px 4px 0px rgba(25, 76, 34, 0.1);
   padding: 15px;
-  margin-top: 12px;
+  margin-top: 15px;
 }
