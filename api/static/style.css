@@ -470,53 +470,37 @@ tr.is-alerting td {
   /* 左から20px */
 }
 
-.circle1 {
-  width: 50px;
-  height: 50px;
-  border-radius: 50%;
-  background-color: var(--pixel-green);
-  border: 3px solid var(--pixel-dark-alpha);
-  margin: 300px auto;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: #fff;
-  font-size: 14px;
-}
-
-.circle2 {
-  width: 50px;
-  height: 50px;
-  border-radius: 50%;
-  background-color: var(--pixel-green);
-  border: 3px solid var(--pixel-dark-alpha);
-  margin: 100px auto;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: #fff;
-  font-size: 14px;
-}
-
+.circle1,
+.circle2,
 .circle3 {
   width: 50px;
   height: 50px;
   border-radius: 50%;
   background-color: var(--pixel-green);
   border: 3px solid var(--pixel-dark-alpha);
-  margin: 20px auto;
+  margin: 10px auto;
   display: flex;
   align-items: center;
   justify-content: center;
   color: #fff;
-  font-size: 14px;
+  font-size: 11px;
+  text-align: center;
 }
 
-.sectoin {
+.map-section {
   flex: 1;
   padding: 10px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
 }
 
-.section:not(:last-child) {
+.map-section:not(:last-child) {
   border-right: 2px solid var(--pixel-dark-alpha);
+}
+
+.area-label {
+  font-weight: bold;
+  margin-bottom: 8px;
+  color: var(--pixel-dark-solid);
 }
