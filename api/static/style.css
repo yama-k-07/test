@@ -465,17 +465,45 @@ tr.is-alerting td {
   position: absolute;
   top: 10px;
   /* 上から10px */
-  left: 1000px;
+  left: 900px;
   /* 左から20px */
 }
 
-.circle {
+.circle1 {
   width: 50px;
   height: 50px;
   border-radius: 50%;
   background-color: var(--pixel-green);
   border: 3px solid var(--pixel-dark-alpha);
+  margin: 300px auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 14px;
+}
 
+.circle2 {
+  width: 50px;
+  height: 50px;
+  border-radius: 50%;
+  background-color: var(--pixel-green);
+  border: 3px solid var(--pixel-dark-alpha);
+  margin: 100px auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 14px;
+}
+
+.circle3 {
+  width: 50px;
+  height: 50px;
+  border-radius: 50%;
+  background-color: var(--pixel-green);
+  border: 3px solid var(--pixel-dark-alpha);
+  margin: 20px auto;
   display: flex;
   align-items: center;
   justify-content: center;
