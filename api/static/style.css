@@ -6,7 +6,7 @@
   --pixel-green: #2d9610;
   --pixel-red: #ff4b2b;
   /* 重すぎない深緑（透過） */
-  --pixel-dark-alpha: rgba(25, 76, 34, 0.7); 
+  --pixel-dark-alpha: rgba(25, 76, 34, 0.7);
   --pixel-dark-solid: #194c22;
   --glass-bg: rgba(255, 255, 255, 0.65);
 }
@@ -27,7 +27,7 @@ body {
   background: var(--glass-bg);
   backdrop-filter: blur(8px);
   border: 4px solid var(--pixel-dark-alpha);
-  box-shadow: 6px 6px 0px rgba(0,0,0,0.1);
+  box-shadow: 6px 6px 0px rgba(0, 0, 0, 0.1);
   padding: 15px;
   margin-bottom: 40px;
   text-align: center;
@@ -56,7 +56,7 @@ body {
   color: #fff !important;
   display: inline-block;
   padding: 4px 15px;
-  margin-top: -48px; 
+  margin-top: -48px;
   margin-left: -10px;
   border: 4px solid var(--pixel-dark-alpha);
 }
@@ -64,10 +64,8 @@ body {
 /* ===== エリアボード：基本設定（PCなどの横長画面） ===== */
 .area-board {
   display: grid;
-  grid-template-columns: repeat(
-    auto-fit,
-    minmax(min(12.5%, 140px), 1fr)
-  );
+  grid-template-columns: repeat(auto-fit,
+      minmax(min(12.5%, 140px), 1fr));
   gap: 1rem;
   text-align: center;
   justify-content: center;
@@ -76,27 +74,29 @@ body {
 
 /* ===== 画面が狭い（縦長）時の横スライド設定 ===== */
 @media (max-width: 1200px) {
-.area-board {
+  .area-board {
     display: flex;
     flex-wrap: nowrap;
     overflow-x: auto;
     justify-content: flex-start;
-    
+
     /* 上下のパディングを増やして、指で触れる面積を広げる */
-    padding: 20px 10px 40px 10px; 
-    
+    padding: 20px 10px 40px 10px;
+
     /* スムーズなスクロールとスナップ */
     scroll-snap-type: x mandatory;
-    -webkit-overflow-scrolling: touch; /* iOSでの慣性スクロール */
-    
+    -webkit-overflow-scrolling: touch;
+    /* iOSでの慣性スクロール */
+
     /* 標準のスクロールバーを隠さず、むしろ操作しやすくする */
-    gap: 15px; 
+    gap: 15px;
   }
 
   .area-card {
     /* カードサイズを少し大きくしてタップ・スワイプしやすく */
-    flex: 0 0 160px; 
-    scroll-snap-align: center; /* 中央に止まるようにして視認性UP */
+    flex: 0 0 160px;
+    scroll-snap-align: center;
+    /* 中央に止まるようにして視認性UP */
     margin-right: 0;
     /* 影を少し強くして、浮いている（動かせる）感を出す */
     box-shadow: 10px 10px 0px rgba(0, 0, 0, 0.15);
@@ -106,7 +106,8 @@ body {
 /* ===== ビット調カスタムスクロールバー（スマホ・PC共通で太くする） ===== */
 /* 全体のバーの高さ */
 .area-board::-webkit-scrollbar {
-  height: 24px; /* 倍の太さに変更 */
+  height: 24px;
+  /* 倍の太さに変更 */
 }
 
 /* バーの通り道 */
@@ -121,14 +122,15 @@ body {
   background: var(--pixel-green);
   border: 3px solid var(--pixel-dark-alpha);
   /* ドット絵風の凹凸デザイン */
-  box-shadow: inset -4px -4px 0px rgba(0,0,0,0.2), 
-              inset 4px 4px 0px rgba(255,255,255,0.3);
+  box-shadow: inset -4px -4px 0px rgba(0, 0, 0, 0.2),
+    inset 4px 4px 0px rgba(255, 255, 255, 0.3);
 }
 
 /* ホバー時に色を変えて「掴める」ことを強調 */
 .area-board::-webkit-scrollbar-thumb:hover {
   background: var(--pixel-blue);
 }
+
 /* ===== ビット調カスタムスクロールバー（横スライド用） ===== */
 .area-board::-webkit-scrollbar {
   height: 12px;
@@ -142,13 +144,14 @@ body {
 .area-board::-webkit-scrollbar-thumb {
   background: var(--pixel-green);
   border: 2px solid var(--pixel-dark-alpha);
-  box-shadow: 2px 2px 0px rgba(0,0,0,0.2);
+  box-shadow: 2px 2px 0px rgba(0, 0, 0, 0.2);
 }
 
 .area-card {
   min-width: 0;
   font-size: clamp(16px, 1.2vw, 20px);
-  background: rgba(66, 133, 123, 0.85); /* 透明度を調整 */
+  background: rgba(66, 133, 123, 0.85);
+  /* 透明度を調整 */
   border: 3px solid var(--pixel-dark-alpha);
   color: #fff;
   transition: transform 0.1s;
@@ -182,6 +185,7 @@ body {
   .settings-container {
     flex-direction: column;
   }
+
   .column-box {
     width: 100% !important;
   }
@@ -205,14 +209,22 @@ body {
   transform: translate(3px, 3px);
 }
 
-.button.is-primary { background-color: var(--pixel-blue); color: #fff; }
-.button.is-success { background-color: var(--pixel-green); color: #fff; }
+.button.is-primary {
+  background-color: var(--pixel-blue);
+  color: #fff;
+}
+
+.button.is-success {
+  background-color: var(--pixel-green);
+  color: #fff;
+}
 
 /* テーブルの透明感 */
 .table {
   background-color: rgba(255, 255, 255, 0.3);
   border: 1px solid var(--pixel-dark-alpha);
 }
+
 .table thead th {
   background: rgba(25, 76, 34, 0.15);
   color: var(--pixel-dark-solid);
@@ -275,28 +287,31 @@ input[type="checkbox"] {
   appearance: none;
   -webkit-appearance: none;
   -moz-appearance: none;
-  
+
   width: 24px !important;
   height: 24px !important;
   min-width: 24px;
-  
+
   background-color: rgba(255, 255, 255, 0.4);
   border: 3px solid var(--pixel-dark-alpha) !important;
   border-radius: 0 !important;
-  
+
   position: relative;
   cursor: pointer;
   vertical-align: middle;
   margin: 0 8px 0 0 !important;
   padding: 0 !important;
   display: inline-block;
-  transition: background-color 0.1s; /* 色の変化を少し滑らかに */
+  transition: background-color 0.1s;
+  /* 色の変化を少し滑らかに */
 }
 
 /* チェックが入った時：背景を赤に変更 */
 input[type="checkbox"]:checked {
-  background-color: var(--pixel-red) !important; /* 緑から赤に変更 */
-  border-color: #8b0000 !important; /* 枠も少し濃い赤にして締める */
+  background-color: var(--pixel-red) !important;
+  /* 緑から赤に変更 */
+  border-color: #8b0000 !important;
+  /* 枠も少し濃い赤にして締める */
 }
 
 /* チェックマークのデザイン（白のレ点） */
@@ -318,7 +333,8 @@ input[type="checkbox"]:hover {
 }
 
 input[type="checkbox"]:checked:hover {
-  background-color: #ff6b52 !important; /* チェック中のホバー色（明るい赤） */
+  background-color: #ff6b52 !important;
+  /* チェック中のホバー色（明るい赤） */
 }
 
 /* チェックが入った時の状態：背景を緑にし、ドットの「レ点」を出す */
@@ -337,7 +353,8 @@ input[type="checkbox"]:checked::after {
   width: 8px;
   height: 14px;
   border: solid white;
-  border-width: 0 4px 4px 0; /* 太めの線でドット感を出す */
+  border-width: 0 4px 4px 0;
+  /* 太めの線でドット感を出す */
   transform: rotate(45deg);
 }
 
@@ -357,11 +374,15 @@ input[type="checkbox"]:checked::after {
     background-color: rgba(255, 75, 43, 0.4);
     box-shadow: 8px 8px 0px rgba(255, 75, 43, 0.1);
   }
+
   50% {
-    background-color: rgba(255, 75, 43, 0.8); /* 濃くなる */
-    box-shadow: 0px 0px 20px rgba(255, 75, 43, 0.6); /* 光が溢れるような効果 */
+    background-color: rgba(255, 75, 43, 0.8);
+    /* 濃くなる */
+    box-shadow: 0px 0px 20px rgba(255, 75, 43, 0.6);
+    /* 光が溢れるような効果 */
     border-color: #ff0000;
   }
+
   100% {
     background-color: rgba(255, 75, 43, 0.4);
     box-shadow: 8px 8px 0px rgba(255, 75, 43, 0.1);
@@ -395,19 +416,27 @@ tr.is-alerting td {
 
 /* ログイン画面用のボタン強調（少し大きく） */
 .login-card .button.is-primary {
-    font-size: 1.2rem;
-    height: 3.5rem;
-    background-color: var(--pixel-blue);
+  font-size: 1.2rem;
+  height: 3.5rem;
+  background-color: var(--pixel-blue);
 }
 
 /* 入力欄の文字を中央寄せ（OPERATOR IDとかをかっこよく見せる） */
 .login-card input {
-    text-align: center;
-    letter-spacing: 2px;
+  text-align: center;
+  letter-spacing: 2px;
 }
 
 /* ログイン画面のサブタイトル位置を微調整 */
 .login-card .subtitle {
-    display: block;
-    margin-bottom: 25px;
+  display: block;
+  margin-bottom: 25px;
+}
+
+.inner-box {
+  background: rgba(255, 255, 255, 0.3);
+  border: 3px solid var(--pixel-dark-alpha);
+  box-shadow: 4px 4px 0px rgba(25, 76, 34, 0.1);
+  padding: 15px;
+  margin-top: 12px;
 }
