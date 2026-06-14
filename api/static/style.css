@@ -434,6 +434,7 @@ tr.is-alerting td {
 }
 
 .inner-box {
+  display: flex;
   position: relative;
   height: 400px;
   background: rgba(255, 255, 255, 0.3);
@@ -509,4 +510,13 @@ tr.is-alerting td {
   justify-content: center;
   color: #fff;
   font-size: 14px;
+}
+
+.sectoin {
+  flex: 1;
+  padding: 10px;
+}
+
+.section:not(:last-child) {
+  border-right: 2px solid var(--pixel-dark-alpha);
 }
