@@ -457,7 +457,7 @@ tr.is-alerting td {
   position: absolute;
   top: 10px;
   /* 上から10px */
-  left: 250px;
+  left: 500px;
   /* 左から20px */
 }
 
@@ -465,6 +465,20 @@ tr.is-alerting td {
   position: absolute;
   top: 10px;
   /* 上から10px */
-  left: 500px;
+  left: 1000px;
   /* 左から20px */
+}
+
+.circle {
+  width: 50px;
+  height: 50px;
+  border-radius: 50%;
+  background-color: var(--pixel-green);
+  border: 3px solid var(--pixel-dark-alpha);
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 14px;
 }
