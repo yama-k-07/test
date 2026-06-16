@@ -90,8 +90,8 @@ def login_page():
             session['logged_in'] = True
             session['user_email'] = result.user.email
             return jsonify({"status": "success", "redirect": url_for("index")})
-        except Exception:
-            return jsonify({"status": "error", "message": "IDまたはパスワードが違います"}), 401
+        except Exception as e:
+            return jsonify({"status": "error", "message": str(e)}), 401
 
     if session.get('logged_in'):
         return redirect(url_for('index'))
