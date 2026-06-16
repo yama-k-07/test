@@ -221,5 +221,9 @@ def delete_area():
 
 
 
+@app.route("/test-deploy")
+def test_deploy():
+    return "DEPLOYED-V3-POST-OK"
+
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=5000, debug=False)
