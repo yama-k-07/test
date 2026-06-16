@@ -39,7 +39,7 @@
 
             <div class="field">
                 <div class="control">
-                    <input class="input" type="text" placeholder="OPERATOR ID">
+                    <input class="input" type="email" placeholder="OPERATOR EMAIL">
                 </div>
             </div>
 
@@ -58,22 +58,32 @@
     </div>
 
 <script>
-    document.getElementById('loginBtn').addEventListener('click', () => {
-        const id = document.querySelector('input[type="text"]').value;
-        const pw = document.querySelector('input[type="password"]').value;
+    document.getElementById('loginBtn').addEventListener('click', async () => {
+        const email = document.querySelector('input[type="text"]').value.trim();
+        const password = document.querySelector('input[type="password"]').value.trim();
+        const btn = document.getElementById('loginBtn');
 
-        // ハリボテなので値は何でもOK
-        fetch('/api/login_mock', { 
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ id: id, password: pw })
-        })
-        .then(res => res.json())
-        .then(data => {
-            if(data.status === "success") {
+        btn.classList.add('is-loading');
+        btn.disabled = true;
+
+        try {
+            const res = await fetch('/api/login', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ email, password })
+            });
+            const data = await res.json();
+            if (data.status === "success") {
                 window.location.href = data.redirect;
+            } else {
+                alert(data.message || 'ログインに失敗しました');
             }
-        });
+        } catch {
+            alert('通信エラーが発生しました');
+        } finally {
+            btn.classList.remove('is-loading');
+            btn.disabled = false;
+        }
     });
 </script>
 </body>

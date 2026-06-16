@@ -88,10 +88,22 @@ def index():
     return render_template("index.html")
 
 
-@app.route("/api/login_mock", methods=["POST"])
-def login_mock():
-    session['logged_in'] = True
-    return jsonify({"status": "success", "redirect": url_for("index")})
+@app.route("/api/login", methods=["POST"])
+def login():
+    data = request.json or {}
+    email = data.get("email", "").strip()
+    password = data.get("password", "").strip()
+
+    if not email or not password:
+        return jsonify({"status": "error", "message": "IDとパスワードを入力してください"}), 400
+
+    try:
+        result = supabase.auth.sign_in_with_password({"email": email, "password": password})
+        session['logged_in'] = True
+        session['user_email'] = result.user.email
+        return jsonify({"status": "success", "redirect": url_for("index")})
+    except Exception:
+        return jsonify({"status": "error", "message": "IDまたはパスワードが違います"}), 401
 
 
 @app.route("/logout")
