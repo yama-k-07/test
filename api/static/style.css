@@ -433,74 +433,37 @@ tr.is-alerting td {
   margin-bottom: 25px;
 }
 
-.inner-box {
+/* 入場者タイル（簡易マップ風・ビット調） */
+.worker-grid {
   display: flex;
-  position: relative;
-  height: 400px;
-  background: rgba(255, 255, 255, 0.3);
-  border: 15px solid var(--pixel-dark-alpha);
-  box-shadow: 4px 4px 0px rgba(25, 76, 34, 0.1);
-  padding: 15px;
-  margin-top: 12px;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+  margin-top: 6px;
 }
 
-
-
-.Area1 {
-  position: absolute;
-  top: 10px;
-  /* 上から10px */
-  left: 20px;
-  /* 左から20px */
-}
-
-.Area2 {
-  position: absolute;
-  top: 10px;
-  /* 上から10px */
-  left: 500px;
-  /* 左から20px */
-}
-
-.Area3 {
-  position: absolute;
-  top: 10px;
-  /* 上から10px */
-  left: 900px;
-  /* 左から20px */
-}
-
-.circle1,
-.circle2,
-.circle3 {
-  width: 50px;
-  height: 50px;
-  border-radius: 50%;
-  background-color: var(--pixel-green);
-  border: 3px solid var(--pixel-dark-alpha);
-  margin: 10px auto;
-  display: flex;
+.worker-tile {
+  display: inline-flex;
   align-items: center;
   justify-content: center;
+  min-width: 54px;
+  min-height: 54px;
+  padding: 6px;
+  font-family: 'DotGothic16', sans-serif;
+  font-size: 12px;
   color: #fff;
-  font-size: 11px;
   text-align: center;
+  word-break: break-all;
+  background: var(--pixel-green);
+  border: 3px solid var(--pixel-dark-alpha);
+  box-shadow: 3px 3px 0 rgba(0, 0, 0, 0.2);
 }
 
-.map-section {
-  flex: 1;
-  padding: 10px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
+.worker-tile.offline {
+  background: #8f8f8f;
+  opacity: .7;
 }
 
-.map-section:not(:last-child) {
-  border-right: 2px solid var(--pixel-dark-alpha);
-}
-
-.area-label {
-  font-weight: bold;
-  margin-bottom: 8px;
-  color: var(--pixel-dark-solid);
+.worker-empty {
+  color: rgba(255, 255, 255, .7);
 }

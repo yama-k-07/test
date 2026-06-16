@@ -50,7 +50,7 @@ async function loadAreaBoard() {
 async function saveAreaState(areaId, instruction, fire) {
   await fetch('/api/area_status', {
     method: "POST",
-    headers: {"Content-Type": "application/json"},
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify([
       { area_id: areaId, instruction, fire }
     ])
@@ -126,7 +126,7 @@ function instructionOptions(current) {
 async function saveInstruction(areaId, instruction) {
   await fetch('/api/area_status', {
     method: "POST",
-    headers: {"Content-Type": "application/json"},
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify([{ area_id: areaId, instruction, fire: false }])
   });
   isEditing = false;
@@ -164,7 +164,7 @@ async function saveAreaOrder() {
 
   await fetch('/api/area_order', {
     method: "POST",
-    headers: {"Content-Type": "application/json"},
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(order)
   });
 }
@@ -555,7 +555,7 @@ document.addEventListener('DOMContentLoaded', () => {
 function updateAlertStyle(checkbox) {
   // チェックボックスが含まれる一番近い「box」または「tr」を探す
   const target = checkbox.closest('.box') || checkbox.closest('tr');
-  
+
   if (checkbox.checked) {
     target.classList.add('is-alerting');
   } else {
@@ -564,7 +564,7 @@ function updateAlertStyle(checkbox) {
 }
 
 // 動的に追加されるチェックボックスにも対応するため、イベント委譲を使用
-document.addEventListener('change', function(e) {
+document.addEventListener('change', function (e) {
   if (e.target && e.target.type === 'checkbox') {
     updateAlertStyle(e.target);
   }
@@ -573,4 +573,56 @@ document.addEventListener('change', function(e) {
 // ページ読み込み時やデータ更新時にも初期状態を反映させる
 function refreshAlertStyles() {
   document.querySelectorAll('input[type="checkbox"]').forEach(updateAlertStyle);
+}
+
+function createAreaCard(area, users) {
+  const col = document.createElement("div");
+  col.className = "area-card";
+  col.dataset.areaId = area.area_id;
+
+  const esc = (s) => String(s).replace(/[&<>"']/g, c =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+  const tiles = users.map(u => {
+    const offline = /圏外/.test(u);                       // 圏外表記が来ればグレー（来なければ全員緑）
+    return `<div class="worker-tile${offline ? " offline" : ""}">${esc(u)}</div>`;
+  }).join("");
+
+  col.innerHTML = `
+    <div class="box areacard">
+      <h2>${esc(area.area_id)}</h2><br>
+
+      <div class="field">
+        <label class="label">指示</label>
+        <div class="control">
+          <select class="select instruction">
+            ${instructionOptions(area.instruction)}
+          </select>
+        </div>
+      </div>
+
+      <div class="field">
+        <label class="checkbox">
+          <input type="checkbox" class="fire" ${area.fire ? "checked" : ""}>
+          火災通報有無
+        </label>
+      </div>
+
+      <div class="content">
+        <strong>入場者 (${users.length})</strong>
+        <div class="worker-grid">${tiles || '<span class="worker-empty">―</span>'}</div>
+      </div>
+    </div>
+  `;
+
+  const instructionEl = col.querySelector(".instruction");
+  const fireEl = col.querySelector(".fire");
+  const save = () => {
+    isEditing = true;
+    saveAreaState(area.area_id, instructionEl.value, fireEl.checked);
+  };
+  instructionEl.addEventListener("change", save);
+  fireEl.addEventListener("change", save);
+
+  return col;
 }
