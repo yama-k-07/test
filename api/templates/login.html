@@ -59,7 +59,7 @@
 
 <script>
     document.getElementById('loginBtn').addEventListener('click', async () => {
-        const email = document.querySelector('input[type="text"]').value.trim();
+        const email = document.querySelector('input[type="email"]').value.trim();
         const password = document.querySelector('input[type="password"]').value.trim();
         const btn = document.getElementById('loginBtn');
 
@@ -67,7 +67,7 @@
         btn.disabled = true;
 
         try {
-            const res = await fetch('/api/login', {
+            const res = await fetch('/', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({ email, password })
