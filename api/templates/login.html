@@ -35,7 +35,7 @@
                 <img src="{{url_for('static', filename='banner.png')}}" class="site-icon" alt="まもっち">
             </div>
             
-            <h1 class="subtitle" style="margin-top: 0; margin-left: 0;">ADMIN ACCESS</h1>
+            <h1 class="subtitle" id="modeTitle" style="margin-top: 0; margin-left: 0;">ADMIN ACCESS</h1>
 
             <div class="field">
                 <div class="control">
@@ -49,19 +49,32 @@
                 </div>
             </div>
 
-            <button class="button is-primary is-fullwidth mt-5" id="loginBtn">
+            <button class="button is-primary is-fullwidth mt-5" id="actionBtn">
                 SYSTEM START
             </button>
-            
-            <p class="mt-4 is-size-7" style="opacity: 0.6;">© 2024 MAMOTCHI SYSTEM Ver 1.0.2</p>
+
+            <p class="mt-3">
+                <a id="toggleLink" style="font-size:0.8rem; opacity:0.7;">アカウントを作成する</a>
+            </p>
+
+            <p class="mt-2 is-size-7" style="opacity: 0.6;">© 2024 MAMOTCHI SYSTEM Ver 1.0.2</p>
         </div>
     </div>
 
 <script>
-    document.getElementById('loginBtn').addEventListener('click', async () => {
+    let mode = 'login';
+
+    document.getElementById('toggleLink').addEventListener('click', () => {
+        mode = mode === 'login' ? 'signup' : 'login';
+        document.getElementById('modeTitle').textContent = mode === 'login' ? 'ADMIN ACCESS' : 'NEW OPERATOR';
+        document.getElementById('actionBtn').textContent = mode === 'login' ? 'SYSTEM START' : 'REGISTER';
+        document.getElementById('toggleLink').textContent = mode === 'login' ? 'アカウントを作成する' : 'ログインに戻る';
+    });
+
+    document.getElementById('actionBtn').addEventListener('click', async () => {
         const email = document.querySelector('input[type="email"]').value.trim();
         const password = document.querySelector('input[type="password"]').value.trim();
-        const btn = document.getElementById('loginBtn');
+        const btn = document.getElementById('actionBtn');
 
         btn.classList.add('is-loading');
         btn.disabled = true;
@@ -70,13 +83,13 @@
             const res = await fetch('/', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ email, password })
+                body: JSON.stringify({ email, password, mode })
             });
             const data = await res.json();
             if (data.status === "success") {
                 window.location.href = data.redirect;
             } else {
-                alert(data.message || 'ログインに失敗しました');
+                alert(data.message || 'エラーが発生しました');
             }
         } catch {
             alert('通信エラーが発生しました');

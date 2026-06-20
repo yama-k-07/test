@@ -81,15 +81,24 @@ def login_page():
         data = request.json or {}
         email = data.get("email", "").strip()
         password = data.get("password", "").strip()
+        mode = data.get("mode", "login")
 
         if not email or not password:
             return jsonify({"status": "error", "message": "IDとパスワードを入力してください"}), 400
 
         try:
-            result = supabase.auth.sign_in_with_password({"email": email, "password": password})
-            session['logged_in'] = True
-            session['user_email'] = result.user.email
-            return jsonify({"status": "success", "redirect": url_for("index")})
+            if mode == "signup":
+                result = supabase.auth.sign_up({"email": email, "password": password})
+                if result.user:
+                    session['logged_in'] = True
+                    session['user_email'] = result.user.email
+                    return jsonify({"status": "success", "redirect": url_for("index")})
+                return jsonify({"status": "error", "message": "登録に失敗しました"}), 400
+            else:
+                result = supabase.auth.sign_in_with_password({"email": email, "password": password})
+                session['logged_in'] = True
+                session['user_email'] = result.user.email
+                return jsonify({"status": "success", "redirect": url_for("index")})
         except Exception as e:
             return jsonify({"status": "error", "message": str(e)}), 401
 
