@@ -269,37 +269,23 @@ function addSsidRow() {
 async function saveSsidTable() {
   const rows = document.querySelectorAll('#ssidTableBody tr');
 
-  const deleteByArea = new Set();
   const deleteBySsid = new Set();
   const postDataList = [];
 
   for (const row of rows) {
     const cells = row.querySelectorAll('input');
-    const originalArea = row.dataset.originalArea || '';
     const originalSsid = row.dataset.originalSsid || '';
 
-    const data = {
-      ssid: cells[0].value,
-      password: cells[1].value
-    };
+    const ssidVal = cells[0] ? cells[0].value.trim() : '';
+    const passVal = cells[1] ? cells[1].value : '';
 
-    // if (originalArea && originalArea !== data.area_id) {
-    //   deleteByArea.add(originalArea);
-    // }
-    if (originalSsid && originalSsid !== data.ssid) {
+    if (!ssidVal) continue;
+
+    if (originalSsid && originalSsid !== ssidVal) {
       deleteBySsid.add(originalSsid);
     }
 
-    postDataList.push(data);
-  }
-
-  // DELETE を先にすべて実行
-  for (const area of deleteByArea) {
-    await fetch('/api/ssid', {
-      method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ area_id: area })
-    });
+    postDataList.push({ area_id: 'any', ssid: ssidVal, password: passVal });
   }
 
   for (const ssid of deleteBySsid) {
@@ -310,16 +296,24 @@ async function saveSsidTable() {
     });
   }
 
-  // POST を後で実行
+  const errors = [];
   for (const data of postDataList) {
-    await fetch('/api/ssid', {
+    const res = await fetch('/api/ssid', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data)
     });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      errors.push(`${data.ssid}: ${body.error || res.status}`);
+    }
   }
 
-  alert('SSIDテーブルを保存しました');
+  if (errors.length > 0) {
+    alert('保存に失敗した項目があります:\n' + errors.join('\n'));
+  } else {
+    alert('SSIDテーブルを保存しました');
+  }
   loadSsidTable();
 }
 
@@ -461,21 +455,30 @@ function addAreaRow() {
 async function saveAreaMapTable() {
   const rows = document.querySelectorAll('#areaTableBody tr');
 
+  const errors = [];
   for (const row of rows) {
     const inputs = row.querySelectorAll('input');
-    const data = {
-      area_id: inputs[0].value,
-      gateway: inputs[1].value
-    };
+    const areaId = inputs[0] ? inputs[0].value.trim() : '';
+    if (!areaId) continue;
 
-    await fetch('/api/area', {
+    const data = { area_id: areaId, gateway: inputs[1] ? inputs[1].value.trim() : '' };
+
+    const res = await fetch('/api/area', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data)
     });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      errors.push(`${areaId}: ${body.error || res.status}`);
+    }
   }
 
-  alert('エリア・gateway設定を保存しました');
+  if (errors.length > 0) {
+    alert('保存に失敗した項目があります:\n' + errors.join('\n'));
+  } else {
+    alert('エリア・gateway設定を保存しました');
+  }
   loadAreaMapTable();
 }
 
@@ -502,37 +505,28 @@ function removeAreaRow(button) {
 function removeRow(button) {
   const row = button.closest('tr');
   if (!row) return;
-  const inputs = row.querySelectorAll('input');
-  const area_id = inputs[0] ? inputs[0].value : '';
-  const ssid = inputs[1] ? inputs[1].value : '';
-  const originalArea = row.dataset.originalArea || '';
   const originalSsid = row.dataset.originalSsid || '';
 
-  // 削除に使うキーは、サーバーに存在する可能性がある元キーを優先する
-  const delBody = {};
-  if (originalArea) delBody.area_id = originalArea;
-  else if (originalSsid) delBody.ssid = originalSsid;
-  else if (area_id) delBody.area_id = area_id;
-  else if (ssid) delBody.ssid = ssid;
-
-  if (Object.keys(delBody).length > 0) {
-    fetch('/api/ssid', {
-      method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(delBody)
-    }).then(async res => {
-      if (res.ok) {
-        row.remove();
-      } else {
-        const txt = await res.text();
-        alert('削除に失敗しました: ' + txt);
-      }
-    }).catch(err => {
-      alert('削除エラー: ' + err);
-    });
-  } else {
+  // サーバー未保存の新規行はそのままDOMから削除
+  if (!originalSsid) {
     row.remove();
+    return;
   }
+
+  fetch('/api/ssid', {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ssid: originalSsid })
+  }).then(async res => {
+    if (res.ok) {
+      row.remove();
+    } else {
+      const txt = await res.text();
+      alert('削除に失敗しました: ' + txt);
+    }
+  }).catch(err => {
+    alert('削除エラー: ' + err);
+  });
 }
 
 document.addEventListener('DOMContentLoaded', () => {

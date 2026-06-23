@@ -17,6 +17,7 @@ supabase: Client = create_client(url, key)
 TABLE_ACCESS_POINT = "access_point"
 TABLE_AREA = "area"
 TABLE_AREA_STATUS = "area_statuses"
+TABLE_AREA_ORDER = "area_order"
 
 entry_status_table = []
 last_seen_dict = {}
@@ -40,6 +41,15 @@ def load_area_table():
         return response.data
     except Exception as e:
         print(f"Error loading area table: {e}")
+        return []
+
+
+def load_area_order():
+    try:
+        response = supabase.table(TABLE_AREA_ORDER).select("area_id").order("sort_order", ascending=True).execute()
+        return [item["area_id"] for item in response.data]
+    except Exception as e:
+        print(f"Error loading area order: {e}")
         return []
 
 
@@ -228,6 +238,36 @@ def delete_area():
     
 
 
+
+
+@app.route("/api/area_order", methods=["GET", "POST"])
+def handle_area_order():
+    if request.method == "POST":
+        data = request.json  # array of area_id strings: ["入口", "100m", ...]
+        records = [{"area_id": aid, "sort_order": i} for i, aid in enumerate(data)]
+        try:
+            supabase.table(TABLE_AREA_ORDER).upsert(records).execute()
+            return jsonify({"message": "area order saved"})
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+    else:
+        return jsonify(load_area_order())
+
+
+@app.route('/api/entry_status', methods=['GET'])
+def get_entry_status():
+    global entry_status_table
+    now = time.time()
+    timeout_sec = 60
+    valid_ids = {
+        device_id for device_id, last_seen in last_seen_dict.items()
+        if now - last_seen <= timeout_sec
+    }
+    active_entries = [
+        entry for entry in entry_status_table
+        if entry['device_id'] in valid_ids
+    ]
+    return jsonify(active_entries)
 
 
 @app.route("/test-deploy")
