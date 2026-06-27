@@ -18,6 +18,7 @@ TABLE_ACCESS_POINT = "access_point"
 TABLE_AREA = "area"
 TABLE_AREA_STATUS = "area_statuses"
 TABLE_AREA_ORDER = "area_order"
+TABLE_WIFI_REPORTS = "wifi_reports"
 
 entry_status_table = []
 last_seen_dict = {}
@@ -25,6 +26,24 @@ last_seen_dict = {}
 # ==========================================
 #  Supabase 連携データ処理関数
 # ==========================================
+
+def load_wifi_reports():
+    try:
+        response = supabase.table(TABLE_WIFI_REPORTS).select("*").order("id", desc=False).execute()
+        result = {}
+        for row in response.data:
+            device_id = row.get("device_id")
+            result[device_id] = {
+                "username": row.get("username"),
+                "report": row.get("report"),
+                "mac01": row.get("mac01"),
+                "mac02": row.get("mac02"),
+            }
+        return result
+    except Exception as e:
+        print(f"Error loading wifi_reports: {e}")
+        return {}
+
 
 def load_ssid_table():
     try:
