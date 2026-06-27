@@ -1,5 +1,6 @@
 let isEditing = false;
 let isSorting = false;
+let lastWifiMapData = null;
 
 document.addEventListener('focusin', e => {
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') {
@@ -534,6 +535,8 @@ document.addEventListener('DOMContentLoaded', () => {
   loadAreaMapTable();
   loadSsidTable();
   loadEntryTable();
+  loadTunnelMap();
+  loadApPositionsTable();
 
   setInterval(() => {
     if (isEditing) return;
@@ -543,6 +546,244 @@ document.addEventListener('DOMContentLoaded', () => {
     loadSsidTable();
   }, 5000);
 });
+
+window.addEventListener('resize', () => {
+  if (lastWifiMapData) renderTunnelMap(lastWifiMapData);
+});
+
+
+// ======== トンネルマップ ========
+function loadTunnelMap() {
+  fetch('/api/wifi_map')
+    .then(r => r.json())
+    .then(data => {
+      lastWifiMapData = data;
+      renderTunnelMap(data);
+    })
+    .catch(e => console.error('wifi_map取得エラー:', e));
+}
+
+function renderTunnelMap(data) {
+  const canvas = document.getElementById('tunnelMap');
+  if (!canvas) return;
+
+  const W = canvas.getBoundingClientRect().width || canvas.parentElement.clientWidth || 600;
+  const H = 200;
+  canvas.width = W;
+  canvas.height = H;
+
+  const ctx = canvas.getContext('2d');
+  const { workers = [], ap_count = 5, area_order = [] } = data;
+
+  const PAD_X = 40;
+  const PAD_TOP = 28;
+  const PAD_BOT = 28;
+  const tW = W - PAD_X * 2;
+  const tH = H - PAD_TOP - PAD_BOT;
+  const tX = PAD_X;
+  const tY = PAD_TOP;
+
+  const C_DARK = 'rgba(25, 76, 34, 0.7)';
+  const C_FILL = 'rgba(66, 133, 123, 0.25)';
+  const C_GREEN = '#2d9610';
+  const C_RED = '#ff4b2b';
+  const C_BLUE = '#207ce5';
+  const C_DIV = 'rgba(25, 76, 34, 0.35)';
+  const FONT = "12px 'DotGothic16', sans-serif";
+  const FONT_SM = "10px 'DotGothic16', sans-serif";
+
+  ctx.clearRect(0, 0, W, H);
+
+  // トンネル背景
+  ctx.fillStyle = C_FILL;
+  ctx.fillRect(tX, tY, tW, tH);
+  ctx.strokeStyle = C_DARK;
+  ctx.lineWidth = 3;
+  ctx.strokeRect(tX, tY, tW, tH);
+
+  // エリア区切り
+  const n = area_order.length;
+  if (n > 0) {
+    ctx.font = FONT;
+    for (let i = 0; i <= n; i++) {
+      const x = tX + tW * i / n;
+      if (i > 0 && i < n) {
+        ctx.strokeStyle = C_DIV;
+        ctx.lineWidth = 1;
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath();
+        ctx.moveTo(x, tY);
+        ctx.lineTo(x, tY + tH);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+      if (i < n) {
+        const labelX = tX + tW * (i + 0.5) / n;
+        ctx.fillStyle = C_DARK;
+        ctx.textAlign = 'center';
+        ctx.fillText(area_order[i], labelX, tY - 6);
+      }
+    }
+  }
+
+  // APマーカー（トンネル下端）
+  for (let i = 0; i < ap_count; i++) {
+    const x = tX + tW * i / (ap_count - 1);
+    const y = tY + tH;
+    ctx.fillStyle = C_BLUE;
+    ctx.strokeStyle = C_DARK;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(x, y, 5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = C_DARK;
+    ctx.font = FONT_SM;
+    ctx.textAlign = 'center';
+    ctx.fillText(`AP${i}`, x, y + 16);
+  }
+
+  // 作業者の円（衝突を避けてY方向にずらす）
+  const R = 18;
+  const centerY = tY + tH / 2;
+  const wList = workers.map(w => ({
+    ...w,
+    cx: tX + tW * Math.max(0, Math.min(1, w.ratio)),
+  })).sort((a, b) => a.cx - b.cx);
+
+  const placed = [];
+  wList.forEach(w => {
+    const candidates = [centerY];
+    for (let s = 1; s <= 3; s++) {
+      candidates.push(centerY - s * R * 2.2);
+      candidates.push(centerY + s * R * 2.2);
+    }
+    let cy = centerY;
+    for (const c of candidates) {
+      if (c < tY + R || c > tY + tH - R) continue;
+      if (!placed.some(p => Math.abs(p.cx - w.cx) < R * 2.2 && Math.abs(p.cy - c) < R * 2.2)) {
+        cy = c;
+        break;
+      }
+    }
+    w.cy = Math.max(tY + R, Math.min(tY + tH - R, cy));
+    placed.push({ cx: w.cx, cy: w.cy });
+  });
+
+  wList.forEach(w => {
+    ctx.fillStyle = w.report ? C_RED : C_GREEN;
+    ctx.strokeStyle = C_DARK;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(w.cx, w.cy, R, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    const label = (w.username || w.device_id || '?').slice(0, 6);
+    ctx.fillStyle = '#fff';
+    ctx.font = FONT_SM;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(label, w.cx, w.cy);
+    ctx.textBaseline = 'alphabetic';
+  });
+
+  // 外/奥ラベル
+  ctx.fillStyle = C_DARK;
+  ctx.font = FONT;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('外', tX - 20, tY + tH / 2);
+  ctx.fillText('奥', tX + tW + 20, tY + tH / 2);
+  ctx.textBaseline = 'alphabetic';
+
+  if (workers.length === 0) {
+    ctx.fillStyle = 'rgba(25,76,34,0.35)';
+    ctx.font = FONT;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('作業者データなし（AP位置設定を確認してください）', tX + tW / 2, tY + tH / 2);
+    ctx.textBaseline = 'alphabetic';
+  }
+}
+
+
+// ======== AP位置設定 ========
+async function loadApPositionsTable() {
+  const body = document.getElementById('apPositionsTableBody');
+  if (!body) return;
+
+  const res = await fetch('/api/ap_positions');
+  const list = await res.json();
+  body.innerHTML = '';
+
+  list.forEach(item => {
+    const row = document.createElement('tr');
+    row.dataset.originalMac = item.mac || '';
+    row.innerHTML = `
+      <td><input class="input" type="text" value="${item.mac}"></td>
+      <td><input class="input" type="number" min="0" max="4" value="${item.position}" style="width:80px;"></td>
+      <td><button class="button is-danger" onclick="removeApPositionRow(this)">削除</button></td>
+    `;
+    body.appendChild(row);
+  });
+}
+
+function addApPositionRow() {
+  const body = document.getElementById('apPositionsTableBody');
+  const row = document.createElement('tr');
+  row.innerHTML = `
+    <td><input class="input" type="text" placeholder="AA:BB:CC:DD:EE:FF"></td>
+    <td><input class="input" type="number" min="0" max="4" placeholder="0〜4" style="width:80px;"></td>
+    <td><button class="button is-danger" onclick="removeApPositionRow(this)">削除</button></td>
+  `;
+  body.appendChild(row);
+}
+
+async function saveApPositionsTable() {
+  const rows = document.querySelectorAll('#apPositionsTableBody tr');
+  const errors = [];
+
+  for (const row of rows) {
+    const inputs = row.querySelectorAll('input');
+    const mac = inputs[0] ? inputs[0].value.trim() : '';
+    const pos = inputs[1] ? parseInt(inputs[1].value) : NaN;
+    if (!mac || isNaN(pos)) continue;
+
+    const res = await fetch('/api/ap_positions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mac, position: pos })
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      errors.push(`${mac}: ${body.error || res.status}`);
+    }
+  }
+
+  if (errors.length > 0) {
+    alert('保存に失敗した項目があります:\n' + errors.join('\n'));
+  } else {
+    alert('AP位置設定を保存しました');
+  }
+  loadApPositionsTable();
+}
+
+function removeApPositionRow(button) {
+  const row = button.closest('tr');
+  const mac = row.dataset.originalMac || row.querySelector('input')?.value;
+  if (!mac) {
+    row.remove();
+    return;
+  }
+  fetch('/api/ap_positions', {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mac })
+  }).then(res => {
+    if (res.ok) row.remove();
+    else alert('削除失敗');
+  });
+}
 
 
 // チェックボックスの状態が変わった時に背景色を変える関数

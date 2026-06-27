@@ -19,6 +19,7 @@ TABLE_AREA = "area"
 TABLE_AREA_STATUS = "area_statuses"
 TABLE_AREA_ORDER = "area_order"
 TABLE_WIFI_REPORTS = "wifi_reports"
+TABLE_AP_POSITIONS = "ap_positions"
 
 entry_status_table = []
 last_seen_dict = {}
@@ -42,6 +43,15 @@ def load_wifi_reports():
         return result
     except Exception as e:
         print(f"Error loading wifi_reports: {e}")
+        return {}
+
+
+def load_ap_positions():
+    try:
+        response = supabase.table(TABLE_AP_POSITIONS).select("*").execute()
+        return {row["mac"]: row["position"] for row in response.data}
+    except Exception as e:
+        print(f"Error loading ap_positions: {e}")
         return {}
 
 
@@ -257,6 +267,81 @@ def delete_area():
     
 
 
+
+
+@app.route('/api/ap_positions', methods=['GET', 'POST', 'DELETE'])
+@login_required
+def handle_ap_positions():
+    if request.method == 'GET':
+        try:
+            response = supabase.table(TABLE_AP_POSITIONS).select("*").order("position", ascending=True).execute()
+            return jsonify(response.data)
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+    elif request.method == 'POST':
+        data = request.json
+        if 'mac' not in data or 'position' not in data:
+            return jsonify({'error': 'mac と position が必要です'}), 400
+        try:
+            supabase.table(TABLE_AP_POSITIONS).upsert(data).execute()
+            return jsonify({'message': 'AP position saved'})
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+    else:
+        data = request.json or {}
+        mac = data.get('mac')
+        if not mac:
+            return jsonify({'error': 'mac を指定してください'}), 400
+        try:
+            supabase.table(TABLE_AP_POSITIONS).delete().eq('mac', mac).execute()
+            return jsonify({'message': 'deleted'})
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/wifi_map', methods=['GET'])
+@login_required
+def get_wifi_map():
+    AP_COUNT = 5
+    reports = load_wifi_reports()
+    ap_pos = load_ap_positions()
+    area_order = load_area_order()
+
+    workers = []
+    for device_id, info in reports.items():
+        mac1 = info.get('mac01')
+        mac2 = info.get('mac02')
+
+        pos1 = ap_pos.get(mac1)
+        pos2 = ap_pos.get(mac2)
+
+        if pos1 is None:
+            continue
+
+        r1 = pos1 / (AP_COUNT - 1)
+        if pos2 is not None:
+            r2 = pos2 / (AP_COUNT - 1)
+            ratio = 0.67 * r1 + 0.33 * r2
+        else:
+            ratio = r1
+
+        n = len(area_order)
+        area_idx = min(int(ratio * n), n - 1) if n > 0 else 0
+        area_id = area_order[area_idx] if area_order else None
+
+        workers.append({
+            'device_id': device_id,
+            'username': info.get('username'),
+            'report': info.get('report'),
+            'ratio': round(ratio, 4),
+            'area_id': area_id,
+        })
+
+    return jsonify({
+        'workers': workers,
+        'ap_count': AP_COUNT,
+        'area_order': area_order,
+    })
 
 
 @app.route("/api/area_order", methods=["GET", "POST"])
