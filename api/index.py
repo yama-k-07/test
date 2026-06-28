@@ -31,6 +31,7 @@ entry_status_table = []
 last_seen_dict = {}
 ap_position_map = {}
 area_order_list = []
+area_status_store = []
 
 # ==========================================
 #  Supabase 連携データ処理関数
@@ -128,6 +129,7 @@ def logout():
 
 @app.route('/api/area_status', methods=['POST', 'GET'])
 def handle_area_status():
+    global area_status_store
     if request.method == 'POST':
         data = request.json
         if not isinstance(data, list):
@@ -137,13 +139,34 @@ def handle_area_status():
             if 'area_id' not in item:
                 return jsonify({'error': '各要素に area_id が必要です'}), 400
 
-        response = load_supabase_table(TABLE_AREA_STATUS)
+        for incoming in data:
+            existing = next((item for item in area_status_store if item.get('area_id') == incoming.get('area_id')), None)
+            if existing is None:
+                area_status_store.append({
+                    'area_id': incoming.get('area_id'),
+                    'instruction': incoming.get('instruction', 'none'),
+                    'fire': bool(incoming.get('fire', False))
+                })
+            else:
+                existing['instruction'] = incoming.get('instruction', existing.get('instruction', 'none'))
+                existing['fire'] = bool(incoming.get('fire', existing.get('fire', False)))
+
+        if supabase is not None:
+            try:
+                supabase.table(TABLE_AREA_STATUS).upsert(data).execute()
+            except Exception as e:
+                print(f"Error updating area status: {e}")
+
         return jsonify({
-            'message': 'area status updated in Supabase', 
-            'area_status': response
+            'message': 'area status updated',
+            'area_status': area_status_store
         })
     else:
+        if area_status_store:
+            return jsonify(area_status_store)
         response = load_supabase_table(TABLE_AREA_STATUS)
+        if response:
+            area_status_store = response
         return jsonify(response)
 
 
