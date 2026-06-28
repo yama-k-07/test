@@ -87,6 +87,21 @@ def load_area_order():
         return list(area_order_list)
 
 
+def normalize_area_row(row):
+    if not isinstance(row, dict):
+        return {}
+    normalized = dict(row)
+    if "area_id" not in normalized and "area" in normalized:
+        normalized["area_id"] = normalized["area"]
+    if "area" not in normalized and "area_id" in normalized:
+        normalized["area"] = normalized["area_id"]
+    return normalized
+
+
+def normalize_area_rows(rows):
+    return [normalize_area_row(row) for row in rows if isinstance(row, dict)]
+
+
 # ==========================================
 #  認証用デコレータ
 # ==========================================
@@ -198,10 +213,13 @@ def handle_ssid():
 
         try:
             if supabase is not None:
-                supabase.table(TABLE_USER).upsert({
-                    "username": username,
-                    "device_id": device_id,
-                }).execute()
+                payload = {"username": username}
+                if device_id:
+                    try:
+                        payload["device_id"] = int(device_id)
+                    except (TypeError, ValueError):
+                        payload["device_id"] = device_id
+                supabase.table(TABLE_USER).upsert(payload).execute()
         except Exception as exc:
             print(f"Error saving user to Supabase: {exc}")
 
@@ -231,13 +249,18 @@ def handle_ssid():
 def handle_area():
     if request.method == "POST":
         data = request.json or {}
-        area_id = data.get("area_id")
+        area_id = data.get("area_id") or data.get("area")
         bssid = data.get("bssid") or data.get("gateway")
         if not area_id or not bssid:
             return jsonify({"error": "area_id と bssid が必要です"}), 400
         try:
             if supabase is not None:
-                supabase.table(TABLE_AP_AREA).upsert({"area_id": area_id, "bssid": bssid}).execute()
+                payload = {"bssid": bssid}
+                try:
+                    payload["area_id"] = int(area_id)
+                except (TypeError, ValueError):
+                    payload["area_id"] = area_id
+                supabase.table(TABLE_AP_AREA).upsert(payload).execute()
             return jsonify({"message": "Area master updated in Supabase"})
         except Exception as exc:
             return jsonify({"error": str(exc)}), 500
@@ -254,7 +277,7 @@ def handle_area():
         except Exception as exc:
             return jsonify({"error": f"Supabaseからの削除に失敗しました: {str(exc)}"}), 500
 
-    return jsonify(load_supabase_table(TABLE_AP_AREA))
+    return jsonify(normalize_area_rows(load_supabase_table(TABLE_AP_AREA)))
 
 
 # ==========================================

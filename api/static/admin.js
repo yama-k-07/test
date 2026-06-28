@@ -277,7 +277,7 @@ async function saveSsidTable() {
       deleteByUsername.add(originalUsername);
     }
 
-    postDataList.push({ area_id: 'any', username: usernameVal, device_id: deviceIdVal });
+    postDataList.push({ username: usernameVal, device_id: deviceIdVal });
   }
 
   for (const username of deleteByUsername) {
@@ -425,7 +425,7 @@ async function loadAreaMapTable() {
     const row = document.createElement('tr');
     row.dataset.originalBssid = item.bssid || '';
     row.innerHTML = `
-      <td><input class="input" type="text" value="${item.area_id || ''}"></td>
+      <td><input class="input" type="text" value="${item.area_id || item.area || ''}"></td>
       <td><input class="input" type="text" value="${item.bssid || ''}"></td>
       <td><button class="button is-danger" onclick="removeAreaRow(this)">削除</button></td>
     `;
