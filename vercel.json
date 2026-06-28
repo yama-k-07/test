@@ -6,7 +6,7 @@
     },
     {
       "source": "/(.*)",
-      "destination": "app.py"
+      "destination": "index.py"
     }
   ]
 }

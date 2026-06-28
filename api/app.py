@@ -15,11 +15,12 @@ key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
 supabase: Client = create_client(url, key)
 
 TABLE_ACCESS_POINT = "access_point"
-TABLE_AREA = "area"
-TABLE_AREA_STATUS = "area_statuses"
+TABLE_AP_AREA = "ap_areas"
+TABLE_AREA_STATUS = "area_status"
 TABLE_AREA_ORDER = "area_order"
 TABLE_WIFI_REPORTS = "wifi_reports"
 TABLE_AP_POSITIONS = "ap_positions"
+TABLE_USER = "user"
 
 entry_status_table = []
 last_seen_dict = {}
@@ -66,7 +67,7 @@ def load_ssid_table():
 
 def load_area_table():
     try:
-        response = supabase.table(TABLE_AREA).select("*").execute()
+        response = supabase.table(TABLE_AP_AREA).select("*").execute()
         return response.data
     except Exception as e:
         print(f"Error loading area table: {e}")
@@ -193,77 +194,157 @@ def handle_area_status():
         try:
             response = supabase.table(TABLE_AREA_STATUS).upsert(data).execute()
             return jsonify({
-                'message': 'area status updated in Supabase', 
+                'message': 'area status updated in Supabase',
                 'area_status': response.data
             })
         except Exception as e:
-            return jsonify({'error': f'Supabaseの更新に失敗しました: {str(e)}'}), 500
+            try:
+                fallback = supabase.table('area_statuses').upsert(data).execute()
+                return jsonify({'message': 'area status updated in Supabase', 'area_status': fallback.data})
+            except Exception as fallback_error:
+                return jsonify({'error': f'Supabaseの更新に失敗しました: {str(e)} / {str(fallback_error)}'}), 500
     else:
         try:
             response = supabase.table(TABLE_AREA_STATUS).select("*").execute()
             return jsonify(response.data)
         except Exception as e:
-            return jsonify({'error': f'Supabaseからのデータ取得に失敗しました: {str(e)}'}), 500
+            try:
+                response = supabase.table('area_statuses').select("*").execute()
+                return jsonify(response.data)
+            except Exception as fallback_error:
+                return jsonify({'error': f'Supabaseからのデータ取得に失敗しました: {str(e)} / {str(fallback_error)}'}), 500
 
 
 @app.route('/api/ssid', methods=['POST', 'GET'])
 def handle_ssid():
     if request.method == 'POST':
-        data = request.json
-        if 'ssid' not in data:
-            return jsonify({'error': 'ssidが必要です'}), 400
-        try:
-            supabase.table(TABLE_ACCESS_POINT).upsert(data).execute()
-            return jsonify({'message': 'SSID updated in Supabase'})
-        except Exception as e:
-            return jsonify({'error': str(e)}), 500
+        data = request.json or {}
+        payload = dict(data)
+
+        if 'username' not in payload and 'ssid' in payload:
+            payload['username'] = payload['ssid']
+        if 'device_id' not in payload and 'password' in payload:
+            payload['device_id'] = payload['password']
+
+        if 'ssid' not in payload and payload.get('username'):
+            payload['ssid'] = payload['username']
+        if 'password' not in payload and payload.get('device_id'):
+            payload['password'] = payload['device_id']
+
+        if not payload.get('username') and not payload.get('ssid') and not payload.get('device_id') and not payload.get('password'):
+            return jsonify({'error': 'usernameまたはssid、device_idまたはpasswordが必要です'}), 400
+
+        saved = False
+        errors = []
+
+        if payload.get('ssid') or payload.get('password'):
+            try:
+                supabase.table(TABLE_ACCESS_POINT).upsert({
+                    'area_id': payload.get('area_id', 'any'),
+                    'ssid': payload.get('ssid') or payload.get('username'),
+                    'password': payload.get('password') or payload.get('device_id')
+                }).execute()
+                saved = True
+            except Exception as e:
+                errors.append(f'access_point: {e}')
+
+        if payload.get('username') or payload.get('device_id'):
+            try:
+                supabase.table(TABLE_USER).upsert({
+                    'username': payload.get('username'),
+                    'device_id': payload.get('device_id')
+                }).execute()
+                saved = True
+            except Exception as e:
+                errors.append(f'user: {e}')
+
+        if not saved:
+            return jsonify({'error': '; '.join(errors)}), 500
+        return jsonify({'message': 'SSID/user updated in Supabase'})
     else:
         return jsonify(load_ssid_table())
-    
+
 
 @app.route('/api/ssid', methods=['DELETE'])
 def delete_ssid():
     data = request.json or {}
-    target_ssid = data.get('ssid')
-    if not target_ssid:
-        return jsonify({'error': 'ssid を指定してください'}), 400
+    target = data.get('username') or data.get('ssid') or data.get('device_id')
+    if not target:
+        return jsonify({'error': 'username または ssid を指定してください'}), 400
+
+    deleted = False
+    errors = []
 
     try:
-        # Supabaseのテーブルから、該当するSSIDの行を削除
-        supabase.table(TABLE_ACCESS_POINT).delete().eq("ssid", target_ssid).execute()
-        return jsonify({'message': 'deleted from Supabase', 'ssid_table': load_ssid_table()})
+        supabase.table(TABLE_ACCESS_POINT).delete().eq("ssid", target).execute()
+        deleted = True
     except Exception as e:
-        return jsonify({'error': f'Supabaseからの削除に失敗しました: {str(e)}'}), 500
+        errors.append(f'access_point: {e}')
+
+    try:
+        supabase.table(TABLE_USER).delete().eq("username", target).execute()
+        deleted = True
+    except Exception as e:
+        errors.append(f'user: {e}')
+
+    if not deleted:
+        return jsonify({'error': f'Supabaseからの削除に失敗しました: {str(errors)}'}), 500
+    return jsonify({'message': 'deleted from Supabase', 'ssid_table': load_ssid_table()})
 
 
 @app.route('/api/area', methods=['POST', 'GET'])
 def handle_area():
     if request.method == 'POST':
-        data = request.json
-        if 'area_id' not in data:
-            return jsonify({'error': 'area_idが必要です'}), 400
+        data = request.json or {}
+        area_id = data.get('area_id')
+        bssid = data.get('bssid') or data.get('gateway')
+        if not area_id or not bssid:
+            return jsonify({'error': 'area_idとbssidが必要です'}), 400
+
         try:
-            supabase.table(TABLE_AREA).upsert(data).execute()
-            return jsonify({'message': 'Area master updated in Supabase'})
-        except Exception as e:
-            return jsonify({'error': str(e)}), 500
+            area_number = int(area_id)
+        except (TypeError, ValueError):
+            area_number = None
+
+        payload_candidates = []
+        if area_number is not None:
+            payload_candidates.append({'area': area_number, 'bssid': bssid})
+        payload_candidates.extend([
+            {'area': area_id, 'bssid': bssid},
+            {'area_id': area_id, 'bssid': bssid},
+            {'area': area_id, 'bssid': bssid},
+            {'bssid': bssid},
+        ])
+
+        last_error = None
+        for payload in payload_candidates:
+            try:
+                supabase.table(TABLE_AP_AREA).upsert(payload).execute()
+                return jsonify({'message': 'Area master updated in Supabase'})
+            except Exception as e:
+                last_error = e
+
+        return jsonify({'error': str(last_error)}), 500
     else:
         return jsonify(load_area_table())
-    
+
 
 @app.route('/api/area', methods=['DELETE'])
 def delete_area():
     data = request.json or {}
-    target_area = data.get('area_id')
+    target_area = data.get('bssid') or data.get('gateway') or data.get('area_id')
     if not target_area:
-        return jsonify({'error': 'area_id を指定してください'}), 400
+        return jsonify({'error': 'bssid または area_id を指定してください'}), 400
 
     try:
-        # Supabaseのテーブルから、該当するarea_idの行を削除
-        supabase.table(TABLE_AREA).delete().eq("area_id", target_area).execute()
+        supabase.table(TABLE_AP_AREA).delete().eq("bssid", target_area).execute()
         return jsonify({'message': 'deleted from Supabase', 'area_table': load_area_table()})
     except Exception as e:
-        return jsonify({'error': f'Supabaseからの削除に失敗しました: {str(e)}'}), 500
+        try:
+            supabase.table('ap_areas').delete().eq("bssid", target_area).execute()
+            return jsonify({'message': 'deleted from Supabase', 'area_table': load_area_table()})
+        except Exception as fallback_error:
+            return jsonify({'error': f'Supabaseからの削除に失敗しました: {str(e)} / {str(fallback_error)}'}), 500
     
 
 
