@@ -256,6 +256,53 @@ def get_entry_status():
     ]
     return jsonify(active_entries)
 
+@app.route('/api/entry_status', methods=['GET'])
+def Location_estimation(dev_info):
+    try:
+        response = supabase.table(TABLE_AREA).select("*").execute()
+        area_dict = {}
+        for item in response:
+            area_dict[item["bssid"]] = item["area"]
+
+        output = list()
+        for item in dev_info:
+            output.append({"area_id": area_dict[item["mac01"]],"username": item["username"], "device_id": item["dev_id"]})
+        
+        return output
+
+    except Exception as e:
+        # return jsonify({"error": str(e)}), 500
+        return e 
+    
+    
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    
+
 
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=5000, debug=False)
