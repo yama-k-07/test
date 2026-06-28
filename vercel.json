@@ -2,11 +2,11 @@
   "rewrites": [
     {
       "source": "/api/test-form",
-      "destination": "test_form.py"
+      "destination": "api/test_form.py"
     },
     {
       "source": "/(.*)",
-      "destination": "index.py"
+      "destination": "api/index.py"
     }
   ]
 }
