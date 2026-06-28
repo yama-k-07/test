@@ -4,7 +4,7 @@ from functools import wraps
 import os
 import time
 
-app = Flask(__name__)
+app = Flask(__name__, template_folder="templates", static_folder="static")
 app.secret_key = "mamotchi_secret_key_pixel"
 
 url = os.environ.get("SUPABASE_URL")
@@ -70,8 +70,7 @@ def load_ap_positions():
         ap_position_map.clear()
         ap_position_map.update(result)
         return result
-    except Exception as exc:
-        print(f"Error loading AP positions: {exc}")
+    except Exception:
         return dict(ap_position_map)
 
 
@@ -84,8 +83,7 @@ def load_area_order():
         ordered = [row.get("area_id") for row in sorted(rows, key=lambda item: item.get("sort_order", 0)) if row.get("area_id")]
         area_order_list[:] = ordered
         return ordered
-    except Exception as exc:
-        print(f"Error loading area order: {exc}")
+    except Exception:
         return list(area_order_list)
 
 
@@ -107,6 +105,11 @@ def login_page():
     if session.get("logged_in"):
         return redirect(url_for("index"))
     return render_template("login.html")
+
+
+@app.route("/healthz")
+def healthz():
+    return jsonify({"status": "ok"})
 
 
 @app.route("/index")
