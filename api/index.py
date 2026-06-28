@@ -218,6 +218,7 @@ def delete_area():
 #     ]
 #     return jsonify(active_entries)
 
+<<<<<<< HEAD
 @app.route('/api/entry_status', methods=['GET'])
 def Location_estimation(dev_info):
     try:
@@ -235,6 +236,8 @@ def Location_estimation(dev_info):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
     
+=======
+>>>>>>> parent of 39ec520 (location_estimation追加)
 
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=5000, debug=False)
