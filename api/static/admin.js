@@ -227,6 +227,7 @@ async function loadUserTable() {
     // データ属性にサーバー由来のキーを保存しておく
     // row.dataset.originalArea = item.area_id || '';
     row.dataset.originalUser = item.username || '';
+    row.dataset.originalDeviceId = item.device_id || '';
     row.innerHTML = `
       <td><input class="input" type="text" value="${usernameVal}"></td>
       <td><input class="input" type="text" value="${device_idVal}"></td>
@@ -269,26 +270,26 @@ function addUserRow() {
 async function saveUserTable() {
   const rows = document.querySelectorAll('#userTableBody tr');
 
-  const deleteByUsername = new Set();
+  const deleteByDeviceId = new Set();
   const postDataList = [];
 
   for (const row of rows) {
     const cells = row.querySelectorAll('input');
-    const originalUsername = row.dataset.originalUser || '';
+    const originalDeviceId = row.dataset.originalDeviceId || '';
 
     const usernameVal = cells[0] ? cells[0].value.trim() : '';
     const device_idVal = cells[1] ? cells[1].value : '';
 
     if (!usernameVal) continue;
 
-    if (originalUsername && originalUsername !== usernameVal) {
-      deleteByUsername.add(originalUsername);
+    if (originalDeviceId && originalDeviceId !== device_idVal) {
+      deleteByDeviceId.add(originalDeviceId);
     }
 
     postDataList.push({ /*area_id: 'any', */username: usernameVal, device_id: device_idVal });
   }
 
-  for (const device_id of deleteByUsername) {
+  for (const device_id of deleteByDeviceId) {
     await fetch('/api/user', {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
@@ -505,10 +506,11 @@ function removeAreaRow(button) {
 function removeRow(button) {
   const row = button.closest('tr');
   if (!row) return;
-  const originalUsername = row.dataset.originalUsername || '';
+
+  const originalDeviceId = row.dataset.originalDeviceId || '';
 
   // サーバー未保存の新規行はそのままDOMから削除
-  if (!originalUsername) {
+  if (!originalDeviceId) {
     row.remove();
     return;
   }
@@ -516,7 +518,7 @@ function removeRow(button) {
   fetch('/api/user', {
     method: 'DELETE',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username: originalUsername })
+    body: JSON.stringify({ device_id: originalDeviceId })
   }).then(async res => {
     if (res.ok) {
       row.remove();
