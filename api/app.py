@@ -228,6 +228,7 @@ def handle_user():
 
         try:
             supabase.table(TABLE_USER).upsert(data).execute()
+            supabase
             return jsonify({'message': 'User updated in Supabase'})
         except Exception as e:
             return jsonify({'error': str(e)}), 500
@@ -238,13 +239,13 @@ def handle_user():
 @app.route('/api/user', methods=['DELETE'])
 def delete_user():
     data = request.json or {}
-    target_username = data.get('username')
-    if not target_username:
-        return jsonify({'error': 'username を指定してください'}), 400
+    target_device_id = data.get('device_id')
+    if not target_device_id:
+        return jsonify({'error': 'device_ID を指定してください'}), 400
 
     try:
         # Supabaseのテーブルから、該当するUsernameの行を削除
-        supabase.table(TABLE_USER).delete().eq("username", target_username).execute()
+        supabase.table(TABLE_USER).delete().eq("device_id", target_device_id).execute()
         return jsonify({'message': 'deleted from Supabase', 'user_table': load_user_table()})
     except Exception as e:
         return jsonify({'error': f'Supabaseからの削除に失敗しました: {str(e)}'}), 500
