@@ -173,9 +173,9 @@ async function saveAreaOrder() {
 
 
 
-// ======== SSID管理 ========
-async function loadSsidTable() {
-  const body = document.getElementById('ssidTableBody');
+// ======== USER管理 ========
+async function loadUSERTable() {
+  const body = document.getElementById('userTableBody');
   if (!body) return;
 
   // 現在の行（編集中含む）を取得（既存の元キー情報も読む）
@@ -184,59 +184,58 @@ async function loadSsidTable() {
     const inputs = row.querySelectorAll('input');
     return {
       // original_area: row.dataset.originalArea || '',
-      original_ssid: row.dataset.originalSsid || '',
+      original_user: row.dataset.originalUser || '',
       // area_id: inputs[0] ? inputs[0].value : '',
-      ssid: inputs[0] ? inputs[0].value : '',
-      password: inputs[1] ? inputs[1].value : ''
+      username: inputs[0] ? inputs[0].value : '',
+      device_id: inputs[1] ? inputs[1].value : ''
     };
-  }).filter(r => (r.ssid || r.password));
-  // }).filter(r => (r.area_id || r.ssid || r.password));
+  }).filter(r => (r.username || r.device_id));
+  // }).filter(r => (r.area_id || r.username || r.device_id));
 
-  const res = await fetch('/api/ssid');
-  const ssidList = await res.json();
+  const res = await fetch('/api/user');
+  const userList = await res.json();
   body.innerHTML = '';
 
   // unsaved を消費しつつサーバーの行を表示（unsaved があれば上書きして表示）
   const remaining = [];
   const consumed = new Array(unsaved.length).fill(false);
 
-  ssidList.forEach(item => {
+  userList.forEach(item => {
     // unsaved のうち、元のキーでマッチするものを優先
     let matchedIndex = -1;
     for (let i = 0; i < unsaved.length; i++) {
       if (consumed[i]) continue;
       const u = unsaved[i];
       // if (u.original_area && u.original_area === item.area_id) { matchedIndex = i; break; }
-      if (u.original_ssid && u.original_ssid === item.ssid) { matchedIndex = i; break; }
-      if (u.area_id && u.area_id === item.area_id) { matchedIndex = i; break; }
-      if (u.ssid && u.ssid === item.ssid) { matchedIndex = i; break; }
+      if (u.original_user && u.original_user === item.username) { matchedIndex = i; break; }
+      if (u.username && u.username === item.username) { matchedIndex = i; break; }
     }
 
     // let areaVal = item.area_id;
-    let ssidVal = item.ssid;
-    let passVal = item.password || '';
+    let usernameVal = item.username;
+    let device_idVal = item.device_id || '';
 
     if (matchedIndex >= 0) {
       const u = unsaved[matchedIndex];
       // areaVal = u.area_id || areaVal;
-      ssidVal = u.ssid || ssidVal;
-      passVal = u.password || passVal;
+      usernameVal = u.username || usernameVal;
+      device_idVal = u.device_id || device_idVal;
       consumed[matchedIndex] = true;
     }
 
     const row = document.createElement('tr');
     // データ属性にサーバー由来のキーを保存しておく
     // row.dataset.originalArea = item.area_id || '';
-    row.dataset.originalSsid = item.ssid || '';
+    row.dataset.originalUser = item.username || '';
     row.innerHTML = `
-      <td><input class="input" type="text" value="${ssidVal}"></td>
-      <td><input class="input" type="password" value="${passVal}"></td>
+      <td><input class="input" type="text" value="${usernameVal}"></td>
+      <td><input class="input" type="text" value="${device_idVal}"></td>
       <td><button class="button is-danger" onclick="removeRow(this)">削除</button></td>
     `;
     // row.innerHTML = `
     //   <td><input class="input" type="text" value="${areaVal}"></td>
-    //   <td><input class="input" type="text" value="${ssidVal}"></td>
-    //   <td><input class="input" type="password" value="${passVal}"></td>
+    //   <td><input class="input" type="text" value="${usernameVal}"></td>
+    //   <td><input class="input" type="text" value="${device_idVal}"></td>
     //   <td><button class="button is-danger" onclick="removeRow(this)">削除</button></td>
     // `;
     body.appendChild(row);
@@ -248,74 +247,74 @@ async function loadSsidTable() {
     const u = unsaved[i];
     const row = document.createElement('tr');
     row.innerHTML = `
-      <td><input class="input" type="text" value="${u.ssid}"></td>
-      <td><input class="input" type="password" value="${u.password}"></td>
+      <td><input class="input" type="text" value="${u.username}"></td>
+      <td><input class="input" type="text" value="${u.device_id}"></td>
       <td><button class="button is-danger" onclick="removeRow(this)">削除</button></td>
     `;
     body.appendChild(row);
   }
 }
 
-function addSsidRow() {
-  const body = document.getElementById('ssidTableBody');
+function addUserRow() {
+  const body = document.getElementById('userTableBody');
   const row = document.createElement('tr');
   row.innerHTML = `
-    <td><input class="input" placeholder="ssid"></td>
-    <td><input class="input" placeholder="password"></td>
+    <td><input class="input" placeholder="username"></td>
+    <td><input class="input" placeholder="device_id"></td>
     <td><button class="button is-danger" onclick="removeRow(this)">削除</button></td>
   `;
   body.appendChild(row);
 }
 
-async function saveSsidTable() {
-  const rows = document.querySelectorAll('#ssidTableBody tr');
+async function saveUserTable() {
+  const rows = document.querySelectorAll('#userTableBody tr');
 
-  const deleteBySsid = new Set();
+  const deleteByUsername = new Set();
   const postDataList = [];
 
   for (const row of rows) {
     const cells = row.querySelectorAll('input');
-    const originalSsid = row.dataset.originalSsid || '';
+    const originalUsername = row.dataset.originalUser || '';
 
-    const ssidVal = cells[0] ? cells[0].value.trim() : '';
-    const passVal = cells[1] ? cells[1].value : '';
+    const usernameVal = cells[0] ? cells[0].value.trim() : '';
+    const device_idVal = cells[1] ? cells[1].value : '';
 
-    if (!ssidVal) continue;
+    if (!usernameVal) continue;
 
-    if (originalSsid && originalSsid !== ssidVal) {
-      deleteBySsid.add(originalSsid);
+    if (originalUsername && originalUsername !== usernameVal) {
+      deleteByUsername.add(originalUsername);
     }
 
-    postDataList.push({ area_id: 'any', ssid: ssidVal, password: passVal });
+    postDataList.push({ area_id: 'any', username: usernameVal, device_id: device_idVal });
   }
 
-  for (const ssid of deleteBySsid) {
-    await fetch('/api/ssid', {
+  for (const username of deleteByUsername) {
+    await fetch('/api/user', {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ssid })
+      body: JSON.stringify({ username })
     });
   }
 
   const errors = [];
   for (const data of postDataList) {
-    const res = await fetch('/api/ssid', {
+    const res = await fetch('/api/user', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data)
     });
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
-      errors.push(`${data.ssid}: ${body.error || res.status}`);
+      errors.push(`${data.username}: ${body.error || res.status}`);
     }
   }
 
   if (errors.length > 0) {
     alert('保存に失敗した項目があります:\n' + errors.join('\n'));
   } else {
-    alert('SSIDテーブルを保存しました');
+    alert('ユーザーテーブルを保存しました');
   }
-  loadSsidTable();
+  loadUserTable();
 }
 
 
@@ -435,7 +434,7 @@ async function loadAreaMapTable() {
     row.dataset.originalArea = item.area_id || '';
     row.innerHTML = `
       <td><input class="input" type="text" value="${item.area_id}"></td>
-      <td><input class="input" type="text" value="${item.gateway}"></td>
+      <td><input class="input" type="text" value="${item.mac_address}"></td>
       <td><button class="button is-danger" onclick="removeAreaRow(this)">削除</button></td>
     `;
     body.appendChild(row);
@@ -447,7 +446,7 @@ function addAreaRow() {
   const row = document.createElement('tr');
   row.innerHTML = `
     <td><input class="input" placeholder="area_id"></td>
-    <td><input class="input" placeholder="gateway"></td>
+    <td><input class="input" placeholder="mac_address"></td>
     <td><button class="button is-danger" onclick="removeAreaRow(this)">削除</button></td>
   `;
   body.appendChild(row);
@@ -462,7 +461,7 @@ async function saveAreaMapTable() {
     const areaId = inputs[0] ? inputs[0].value.trim() : '';
     if (!areaId) continue;
 
-    const data = { area_id: areaId, gateway: inputs[1] ? inputs[1].value.trim() : '' };
+    const data = { area_id: areaId, mac_address: inputs[1] ? inputs[1].value.trim() : '' };
 
     const res = await fetch('/api/area', {
       method: 'POST',
@@ -478,7 +477,7 @@ async function saveAreaMapTable() {
   if (errors.length > 0) {
     alert('保存に失敗した項目があります:\n' + errors.join('\n'));
   } else {
-    alert('エリア・gateway設定を保存しました');
+    alert('エリア・MACアドレス設定を保存しました');
   }
   loadAreaMapTable();
 }
@@ -506,18 +505,18 @@ function removeAreaRow(button) {
 function removeRow(button) {
   const row = button.closest('tr');
   if (!row) return;
-  const originalSsid = row.dataset.originalSsid || '';
+  const originalUsername = row.dataset.originalUsername || '';
 
   // サーバー未保存の新規行はそのままDOMから削除
-  if (!originalSsid) {
+  if (!originalUsername) {
     row.remove();
     return;
   }
 
-  fetch('/api/ssid', {
+  fetch('/api/user', {
     method: 'DELETE',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ssid: originalSsid })
+    body: JSON.stringify({ username: originalUsername })
   }).then(async res => {
     if (res.ok) {
       row.remove();
@@ -533,7 +532,7 @@ function removeRow(button) {
 document.addEventListener('DOMContentLoaded', () => {
   loadAreaBoard();
   loadAreaMapTable();
-  loadSsidTable();
+  loadUserTable();
   loadEntryTable();
   loadTunnelMap();
   loadApPositionsTable();
@@ -543,7 +542,7 @@ document.addEventListener('DOMContentLoaded', () => {
     loadAreaBoard();
     loadEntryTable();
     loadAreaMapTable();
-    loadSsidTable();
+    loadUserTable();
   }, 5000);
 });
 

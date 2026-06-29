@@ -14,12 +14,20 @@ url = os.environ.get("SUPABASE_URL")
 key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
 supabase: Client = create_client(url, key)
 
-TABLE_ACCESS_POINT = "access_point"
-TABLE_AREA = "area"
-TABLE_AREA_STATUS = "area_statuses"
+# TABLE_ACCESS_POINT = "access_point"
+# TABLE_AREA = "area"
+# TABLE_AREA_STATUS = "area_statuses"
+# TABLE_AREA_ORDER = "area_order"
+# TABLE_WIFI_REPORTS = "wifi_reports"
+TABLE_AP_POSITIONS = "ap_positions"
+
+TABLE_AP_AREA = "ap_areas"
+TABLE_AREA_STATUS = "area_status"
 TABLE_AREA_ORDER = "area_order"
+TABLE_USER = "user"
 TABLE_WIFI_REPORTS = "wifi_reports"
 TABLE_AP_POSITIONS = "ap_positions"
+TABLE_AREA_ORDER = "ap_area_order"
 
 entry_status_table = []
 last_seen_dict = {}
@@ -55,9 +63,9 @@ def load_ap_positions():
         return {}
 
 
-def load_ssid_table():
+def load_user_table():
     try:
-        response = supabase.table(TABLE_ACCESS_POINT).select("*").execute()
+        response = supabase.table(TABLE_USER).select("*").execute()
         return response.data
     except Exception as e:
         print(f"Error loading SSID table: {e}")
@@ -66,7 +74,7 @@ def load_ssid_table():
 
 def load_area_table():
     try:
-        response = supabase.table(TABLE_AREA).select("*").execute()
+        response = supabase.table(TABLE_AP_AREA).select("*").execute()
         return response.data
     except Exception as e:
         print(f"Error loading area table: {e}")
@@ -82,14 +90,14 @@ def load_area_order():
         return []
 
 
-def get_wifi_credentials():
-    """SSIDとパスワードの辞書（マイコン用）を生成"""
-    ssid_table = load_ssid_table()
-    return {
-        item["ssid"]: item["password"]
-        for item in ssid_table
-        if "ssid" in item and "password" in item
-    }
+# def get_wifi_credentials():
+#     """SSIDとパスワードの辞書（マイコン用）を生成"""
+#     ssid_table = load_ssid_table()
+#     return {
+#         item["ssid"]: item["password"]
+#         for item in ssid_table
+#         if "ssid" in item and "password" in item
+#     }
 
 
 #いる?
@@ -158,21 +166,22 @@ def logout():
     return redirect(url_for('login_page'))
 
 
+#使ってる？
 @app.route("/chkwifi", methods=["GET", "POST"])
 @login_required
 def admin_wifi():
     if request.method == "POST":
-        ssid = request.form.get("ssid")
-        password = request.form.get("password")
-        if ssid and password:
-            new_entry = {"area_id": "any", "ssid": ssid, "password": password}
+        username = request.form.get("username")
+        device_id = request.form.get("device_id")
+        if username and device_id:
+            new_entry = {"area_id": "any", "username": username, "device_id": device_id}
             try:
-                supabase.table(TABLE_ACCESS_POINT).upsert(new_entry).execute()
+                supabase.table(TABLE_USER).upsert(new_entry).execute()
             except Exception as e:
                 print(f"Error saving Wi-Fi to Supabase: {e}")
         return redirect(url_for("admin_wifi"))
 
-    wifi_data = get_wifi_credentials()
+    wifi_data = load_user_table()
     return render_template("wifi.html", wifi_data=wifi_data)
 
 
@@ -206,32 +215,32 @@ def handle_area_status():
             return jsonify({'error': f'Supabaseからのデータ取得に失敗しました: {str(e)}'}), 500
 
 
-@app.route('/api/ssid', methods=['POST', 'GET'])
-def handle_ssid():
+@app.route('/api/user', methods=['POST', 'GET'])
+def handle_user():
     if request.method == 'POST':
         data = request.json
-        if 'ssid' not in data:
-            return jsonify({'error': 'ssidが必要です'}), 400
+        if 'username' not in data:
+            return jsonify({'error': 'usernameが必要です'}), 400
         try:
-            supabase.table(TABLE_ACCESS_POINT).upsert(data).execute()
-            return jsonify({'message': 'SSID updated in Supabase'})
+            supabase.table(TABLE_USER).upsert(data).execute()
+            return jsonify({'message': 'User updated in Supabase'})
         except Exception as e:
             return jsonify({'error': str(e)}), 500
     else:
-        return jsonify(load_ssid_table())
+        return jsonify(load_user_table())
     
 
-@app.route('/api/ssid', methods=['DELETE'])
-def delete_ssid():
+@app.route('/api/user', methods=['DELETE'])
+def delete_user():
     data = request.json or {}
-    target_ssid = data.get('ssid')
-    if not target_ssid:
-        return jsonify({'error': 'ssid を指定してください'}), 400
+    target_username = data.get('username')
+    if not target_username:
+        return jsonify({'error': 'username を指定してください'}), 400
 
     try:
-        # Supabaseのテーブルから、該当するSSIDの行を削除
-        supabase.table(TABLE_ACCESS_POINT).delete().eq("ssid", target_ssid).execute()
-        return jsonify({'message': 'deleted from Supabase', 'ssid_table': load_ssid_table()})
+        # Supabaseのテーブルから、該当するUsernameの行を削除
+        supabase.table(TABLE_USER).delete().eq("username", target_username).execute()
+        return jsonify({'message': 'deleted from Supabase', 'user_table': load_user_table()})
     except Exception as e:
         return jsonify({'error': f'Supabaseからの削除に失敗しました: {str(e)}'}), 500
 
@@ -243,7 +252,7 @@ def handle_area():
         if 'area_id' not in data:
             return jsonify({'error': 'area_idが必要です'}), 400
         try:
-            supabase.table(TABLE_AREA).upsert(data).execute()
+            supabase.table(TABLE_AP_AREA).upsert(data).execute()
             return jsonify({'message': 'Area master updated in Supabase'})
         except Exception as e:
             return jsonify({'error': str(e)}), 500
@@ -260,7 +269,7 @@ def delete_area():
 
     try:
         # Supabaseのテーブルから、該当するarea_idの行を削除
-        supabase.table(TABLE_AREA).delete().eq("area_id", target_area).execute()
+        supabase.table(TABLE_AP_AREA).delete().eq("area_id", target_area).execute()
         return jsonify({'message': 'deleted from Supabase', 'area_table': load_area_table()})
     except Exception as e:
         return jsonify({'error': f'Supabaseからの削除に失敗しました: {str(e)}'}), 500
