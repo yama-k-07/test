@@ -285,7 +285,7 @@ async function saveUserTable() {
       deleteByUsername.add(originalUsername);
     }
 
-    postDataList.push({ /*area_id: 'any', */username: usernameVal, device_id: device_idVal });
+    postDataList.push({ /*area_id: 'any', */"username": usernameVal, "device_id": device_idVal });
   }
 
   for (const username of deleteByUsername) {
