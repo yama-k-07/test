@@ -225,7 +225,8 @@ def handle_user():
             supabase.table(TABLE_USER).upsert(data).execute()
             return jsonify({'message': 'User updated in Supabase'})
         except Exception as e:
-            return jsonify({'error': str(e)}), 500
+            # return jsonify({'error': str(e)}), 500
+            return jsonify({'error': str(data)}), 500
     else:
         return jsonify(load_user_table())
     
