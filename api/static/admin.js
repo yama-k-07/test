@@ -434,7 +434,7 @@ async function loadAreaMapTable() {
     row.dataset.originalArea = item.area_id || '';
     row.innerHTML = `
       <td><input class="input" type="text" value="${item.area_id}"></td>
-      <td><input class="input" type="text" value="${item.mac_address}"></td>
+      <td><input class="input" type="text" value="${item.bssid}"></td>
       <td><button class="button is-danger" onclick="removeAreaRow(this)">削除</button></td>
     `;
     body.appendChild(row);
@@ -446,7 +446,7 @@ function addAreaRow() {
   const row = document.createElement('tr');
   row.innerHTML = `
     <td><input class="input" placeholder="area_id"></td>
-    <td><input class="input" placeholder="mac_address"></td>
+    <td><input class="input" placeholder="bssid"></td>
     <td><button class="button is-danger" onclick="removeAreaRow(this)">削除</button></td>
   `;
   body.appendChild(row);
@@ -461,7 +461,7 @@ async function saveAreaMapTable() {
     const areaId = inputs[0] ? inputs[0].value.trim() : '';
     if (!areaId) continue;
 
-    const data = { area_id: areaId, mac_address: inputs[1] ? inputs[1].value.trim() : '' };
+    const data = { area_id: areaId, bssid: inputs[1] ? inputs[1].value.trim() : '' };
 
     const res = await fetch('/api/area', {
       method: 'POST',
