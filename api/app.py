@@ -220,7 +220,8 @@ def handle_user():
     if request.method == 'POST':
         data = request.json
         if not data.get("username"):
-            return jsonify({'error': 'ユーザー名が入力されていません。str(data.get("username"))'}), 400
+            # return jsonify({'error': 'ユーザー名が入力されていません。str(data.get("username"))'}), 400
+            return jsonify({'error': str(data.get("username"))}), 400
         
         if not data.get("device_id"):
             return jsonify({'error': 'デバイスIDが入力されていません。'}), 400
