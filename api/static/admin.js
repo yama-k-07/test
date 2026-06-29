@@ -174,7 +174,7 @@ async function saveAreaOrder() {
 
 
 // ======== USER管理 ========
-async function loadUSERTable() {
+async function loadUserTable() {
   const body = document.getElementById('userTableBody');
   if (!body) return;
 
