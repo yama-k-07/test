@@ -461,7 +461,7 @@ async function saveAreaMapTable() {
     const areaId = inputs[0] ? inputs[0].value.trim() : '';
     if (!areaId) continue;
 
-    const data = { area_id: areaId, bssid: inputs[1] ? inputs[1].value.trim() : '' };
+    const data = { '"area_id"': areaId, '"bssid"': inputs[1] ? inputs[1].value.trim() : '' };
 
     const res = await fetch('/api/area', {
       method: 'POST',
