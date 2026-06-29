@@ -219,14 +219,17 @@ def handle_area_status():
 def handle_user():
     if request.method == 'POST':
         data = request.json
-        if 'username' not in data:
-            return jsonify({'error': 'usernameが必要です'}), 400
+        if not data.get("username"):
+            return jsonify({'error': 'ユーザー名が入力されていません。'}), 400
+        
+        if not data.get("device_id"):
+            return jsonify({'error': 'デバイスIDが入力されていません。'}), 400
+
         try:
             supabase.table(TABLE_USER).upsert(data).execute()
             return jsonify({'message': 'User updated in Supabase'})
         except Exception as e:
-            # return jsonify({'error': str(e)}), 500
-            return jsonify({'error': str(data)}), 500
+            return jsonify({'error': str(e)}), 500
     else:
         return jsonify(load_user_table())
     
@@ -250,8 +253,12 @@ def delete_user():
 def handle_area():
     if request.method == 'POST':
         data = request.json
-        if 'area_id' not in data:
-            return jsonify({'error': 'area_idが必要です'}), 400
+        if not data.get("area_id"):
+            return jsonify({'error': 'エリアIDが入力されていません。'}), 400
+        
+        if not data.get("bssid"):
+            return jsonify({'error': 'BSSIDが入力されていません。'}), 400
+        
         try:
             supabase.table(TABLE_AP_AREA).upsert(data).execute()
             return jsonify({'message': 'Area master updated in Supabase'})
