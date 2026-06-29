@@ -288,11 +288,11 @@ async function saveUserTable() {
     postDataList.push({ /*area_id: 'any', */username: usernameVal, device_id: device_idVal });
   }
 
-  for (const username of deleteByUsername) {
+  for (const device_id of deleteByUsername) {
     await fetch('/api/user', {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username })
+      body: JSON.stringify({ device_id })
     });
   }
 
