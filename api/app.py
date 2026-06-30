@@ -346,7 +346,7 @@ def get_wifi_map():
         r1 = pos1 / (AP_COUNT - 1)
         if pos2 is not None:
             r2 = pos2 / (AP_COUNT - 1)
-            ratio = 0.67 * r1 + 0.33 * r2
+            ratio = (r1 + r2) / 2
         else:
             ratio = r1
 
