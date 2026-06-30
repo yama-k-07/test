@@ -14,21 +14,13 @@ url = os.environ.get("SUPABASE_URL")
 key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
 supabase: Client = create_client(url, key)
 
-# TABLE_ACCESS_POINT = "access_point"
-# TABLE_AREA = "area"
-# TABLE_AREA_STATUS = "area_statuses"
-# TABLE_AREA_ORDER = "area_order"
-# TABLE_WIFI_REPORTS = "wifi_reports"
-TABLE_AP_POSITIONS = "ap_positions"
-
 TABLE_AP_AREA = "ap_areas"
 TABLE_AREA_STATUS = "area_status"
-TABLE_AREA_ORDER = "area_order"
+TABLE_AREA_ORDER = "ap_area_order"
 TABLE_USER = "user"
 TABLE_WIFI_LOG = "wifi_reports"
 TABLE_WIFI_REPORTS = "latest_wifi_reports"
 TABLE_AP_POSITIONS = "ap_positions"
-TABLE_AREA_ORDER = "ap_area_order"
 
 entry_status_table = []
 last_seen_dict = {}
@@ -333,9 +325,10 @@ def get_wifi_map():
     area_order = load_area_order()
 
     workers = []
-    for device_id, info in reports.items():
-        mac1 = info.get('mac01')
-        mac2 = info.get('mac02')
+    for row in (reports or []):
+        device_id = row.get('device_id')
+        mac1 = row.get('mac01')
+        mac2 = row.get('mac02')
 
         pos1 = ap_pos.get(mac1)
         pos2 = ap_pos.get(mac2)
@@ -356,8 +349,8 @@ def get_wifi_map():
 
         workers.append({
             'device_id': device_id,
-            'username': info.get('username'),
-            'report': info.get('report'),
+            'username': row.get('username'),
+            'report': row.get('report'),
             'ratio': round(ratio, 4),
             'area_id': area_id,
         })
