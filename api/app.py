@@ -76,7 +76,10 @@ def load_area_table():
 def load_area_order():
     try:
         response = supabase.table(TABLE_AREA_ORDER).select("area_id").order("sort_order", desc=False).execute()
-        return [item["area_id"] for item in response.data]
+        if response.data:
+            return [item["area_id"] for item in response.data]
+        fallback = supabase.table(TABLE_AREA_STATUS).select("area_id").execute()
+        return [item["area_id"] for item in (fallback.data or [])]
     except Exception as e:
         print(f"Error loading area order: {e}")
         return []
