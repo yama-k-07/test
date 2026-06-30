@@ -394,31 +394,51 @@ def handle_area_order():
 #     return jsonify(active_entries)
 
 
+# @app.route('/api/entry_status', methods=['GET'])
+# def get_entry_status():
+#     dev_info = load_wifi_reports() or []
+
+#     try:
+#         response = supabase.table(TABLE_AP_AREA).select("*").execute()
+#         area_rows = getattr(response, "data", response) or []
+#         if isinstance(area_rows, tuple):
+#             area_rows = area_rows[0] if area_rows else []
+
+#         area_dict = {
+#             row.get("bssid"): row.get("area")
+#             for row in area_rows
+#             if row.get("bssid") is not None
+#         }
+
+#         output = []
+#         for item in dev_info:
+#             mac = item.get("mac01")
+#             output.append({
+#                 "area_id": area_dict.get(mac),
+#                 "username": item.get("username"),
+#                 "device_id": item.get("dev_id") or item.get("device_id"),
+#             })
+
+#         return jsonify(output)
+
+#     except Exception as e:
+#         return jsonify({"error": str(e)}), 500
+    
+
 @app.route('/api/entry_status', methods=['GET'])
 def get_entry_status():
     dev_info = load_wifi_reports() or []
 
     try:
         response = supabase.table(TABLE_AP_AREA).select("*").execute()
-        area_rows = getattr(response, "data", response) or []
-        if isinstance(area_rows, tuple):
-            area_rows = area_rows[0] if area_rows else []
+        area_dict = {}
+        for item in response:
+            area_dict[item["bssid"]] = item["area"]
 
-        area_dict = {
-            row.get("bssid"): row.get("area")
-            for row in area_rows
-            if row.get("bssid") is not None
-        }
-
-        output = []
+        output = list()
         for item in dev_info:
-            mac = item.get("mac01")
-            output.append({
-                "area_id": area_dict.get(mac),
-                "username": item.get("username"),
-                "device_id": item.get("dev_id") or item.get("device_id"),
-            })
-
+            output.append({"area_id": area_dict[item["mac01"]],"username": item["username"], "device_id": item["dev_id"]})
+        
         return jsonify(output)
 
     except Exception as e:
