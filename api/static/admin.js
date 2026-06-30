@@ -713,20 +713,28 @@ async function loadApPositionsTable() {
   const body = document.getElementById('apPositionsTableBody');
   if (!body) return;
 
-  const res = await fetch('/api/ap_positions');
-  const list = await res.json();
-  body.innerHTML = '';
-
-  list.forEach(item => {
-    const row = document.createElement('tr');
-    row.dataset.originalMac = item.mac || '';
-    row.innerHTML = `
-      <td><input class="input" type="text" value="${item.mac}"></td>
-      <td><input class="input" type="number" min="0" max="4" value="${item.position}" style="width:80px;"></td>
-      <td><button class="button is-danger" onclick="removeApPositionRow(this)">削除</button></td>
-    `;
-    body.appendChild(row);
-  });
+  try {
+    const res = await fetch('/api/ap_positions');
+    const data = await res.json();
+    if (!res.ok) {
+      console.error('ap_positions GET error:', data);
+      return;
+    }
+    const list = Array.isArray(data) ? data : [];
+    body.innerHTML = '';
+    list.forEach(item => {
+      const row = document.createElement('tr');
+      row.dataset.originalMac = item.mac || '';
+      row.innerHTML = `
+        <td><input class="input" type="text" value="${item.mac}"></td>
+        <td><input class="input" type="number" min="0" max="4" value="${item.position}" style="width:80px;"></td>
+        <td><button class="button is-danger" onclick="removeApPositionRow(this)">削除</button></td>
+      `;
+      body.appendChild(row);
+    });
+  } catch (e) {
+    console.error('loadApPositionsTable error:', e);
+  }
 }
 
 function addApPositionRow() {
@@ -756,13 +764,14 @@ async function saveApPositionsTable() {
       body: JSON.stringify({ mac, position: pos })
     });
     if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      errors.push(`${mac}: ${body.error || res.status}`);
+      const b = await res.json().catch(() => ({}));
+      errors.push(`${mac} → ${b.error || `HTTP ${res.status}`}`);
+      console.error('ap_positions save error', mac, b);
     }
   }
 
   if (errors.length > 0) {
-    alert('保存に失敗した項目があります:\n' + errors.join('\n'));
+    alert('保存に失敗しました:\n' + errors.join('\n'));
   } else {
     alert('AP位置設定を保存しました');
   }

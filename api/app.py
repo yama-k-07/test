@@ -84,8 +84,11 @@ def load_area_table():
 
 def load_area_order():
     try:
-        response = supabase.table(TABLE_AREA_ORDER).select("area_id").order("sort_order", ascending=True).execute()
-        return [item["area_id"] for item in response.data]
+        response = supabase.table(TABLE_AREA_ORDER).select("area_id").order("sort_order", desc=False).execute()
+        if response.data:
+            return [item["area_id"] for item in response.data]
+        fallback = supabase.table(TABLE_AREA_STATUS).select("area_id").execute()
+        return [item["area_id"] for item in (fallback.data or [])]
     except Exception as e:
         print(f"Error loading area order: {e}")
         return []
@@ -294,9 +297,11 @@ def delete_area():
 def handle_ap_positions():
     if request.method == 'GET':
         try:
-            response = supabase.table(TABLE_AP_POSITIONS).select("*").order("position", ascending=True).execute()
-            return jsonify(response.data)
+            response = supabase.table(TABLE_AP_POSITIONS).select("*").execute()
+            data = sorted(response.data or [], key=lambda r: r.get("position", 0))
+            return jsonify(data)
         except Exception as e:
+            print(f"[ap_positions GET] {type(e).__name__}: {e}")
             return jsonify({'error': str(e)}), 500
     elif request.method == 'POST':
         data = request.json
@@ -434,6 +439,30 @@ def Location_estimation():
 @app.route("/test-deploy")
 def test_deploy():
     return "DEPLOYED-V3-POST-OK"
+
+
+@app.route("/api/debug/wifi_map")
+@login_required
+def debug_wifi_map():
+    try:
+        wifi_raw = supabase.table(TABLE_LATEST_WIFI_REPORTS).select("*").execute()
+        ap_raw   = supabase.table(TABLE_AP_POSITIONS).select("*").execute()
+        ao_raw   = supabase.table(TABLE_AREA_ORDER).select("*").execute()
+
+        wifi_reports = load_wifi_reports()
+        ap_pos       = load_ap_positions()
+        area_order   = load_area_order()
+
+        return jsonify({
+            "wifi_reports_raw":   wifi_raw.data,
+            "ap_positions_raw":   ap_raw.data,
+            "area_order_raw":     ao_raw.data,
+            "load_wifi_reports":  wifi_reports,
+            "load_ap_positions":  ap_pos,
+            "load_area_order":    area_order,
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=5000, debug=False)
