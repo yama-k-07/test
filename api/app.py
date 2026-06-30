@@ -418,7 +418,7 @@ def Location_estimation():
         output = []
         for item in dev_info:
             mac = item.get("mac01")
-            device_id = item.get("device_id") or item.get("dev_id")
+            device_id = item.get("device_id")
             output.append({
                 "area_id": area_dict.get(mac),
                 "username": user_dict.get(device_id),
