@@ -66,7 +66,7 @@
             <thead>
               <tr>
                 <th>エリアID</th>
-                <th>IPアドレス</th>
+                <th>MACアドレス</th>
                 <th>操作</th>
               </tr>
             </thead>
@@ -80,22 +80,22 @@
       </section>
 
       <section class="box column-box">
-        <h2 class="subtitle">接続先設定</h2>
+        <h2 class="subtitle">ユーザー設定</h2>
         <div class="table-container">
           <table class="table is-fullwidth">
             <thead>
               <tr>
-                <th>SSID</th>
-                <th>パスワード</th>
+                <th>ユーザーネーム</th>
+                <th>デバイスID</th>
                 <th>操作</th>
               </tr>
             </thead>
-            <tbody id="ssidTableBody"></tbody>
+            <tbody id="userTableBody"></tbody>
           </table>
         </div>
         <div class="buttons mt-2">
-          <button class="button is-primary" onclick="addSsidRow()">新規追加</button>
-          <button class="button is-success" onclick="saveSsidTable()">保存</button>
+          <button class="button is-primary" onclick="addUserRow()">新規追加</button>
+          <button class="button is-success" onclick="saveUserTable()">保存</button>
         </div>
       </section>
 
