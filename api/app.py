@@ -19,6 +19,7 @@ TABLE_AREA = "area"
 TABLE_AREA_STATUS = "area_statuses"
 TABLE_AREA_ORDER = "area_order"
 TABLE_WIFI_REPORTS = "wifi_reports"
+TABLE_LATEST_WIFI_REPORTS = "latest_wifi_reports"
 TABLE_AP_POSITIONS = "ap_positions"
 
 entry_status_table = []
@@ -30,15 +31,15 @@ last_seen_dict = {}
 
 def load_wifi_reports():
     try:
-        response = supabase.table(TABLE_WIFI_REPORTS).select("*").order("id", desc=False).execute()
+        response = supabase.table(TABLE_LATEST_WIFI_REPORTS).select("*").execute()
         result = {}
-        for row in response.data:
+        for row in (response.data or []):
             device_id = row.get("device_id")
             result[device_id] = {
                 "username": row.get("username"),
-                "report": row.get("report"),
-                "mac01": row.get("mac01"),
-                "mac02": row.get("mac02"),
+                "report":   row.get("report"),
+                "mac01":    row.get("mac01"),
+                "mac02":    row.get("mac02"),
             }
         return result
     except Exception as e:
@@ -388,7 +389,7 @@ def test_deploy():
 @login_required
 def debug_wifi_map():
     try:
-        wifi_raw = supabase.table(TABLE_WIFI_REPORTS).select("*").order("id", desc=True).limit(20).execute()
+        wifi_raw = supabase.table(TABLE_LATEST_WIFI_REPORTS).select("*").execute()
         ap_raw   = supabase.table(TABLE_AP_POSITIONS).select("*").execute()
         ao_raw   = supabase.table(TABLE_AREA_ORDER).select("*").execute()
 
