@@ -274,9 +274,11 @@ def delete_area():
 def handle_ap_positions():
     if request.method == 'GET':
         try:
-            response = supabase.table(TABLE_AP_POSITIONS).select("*").order("position", ascending=True).execute()
-            return jsonify(response.data)
+            response = supabase.table(TABLE_AP_POSITIONS).select("*").execute()
+            data = sorted(response.data or [], key=lambda r: r.get("position", 0))
+            return jsonify(data)
         except Exception as e:
+            print(f"[ap_positions GET] {type(e).__name__}: {e}")
             return jsonify({'error': str(e)}), 500
     elif request.method == 'POST':
         data = request.json
