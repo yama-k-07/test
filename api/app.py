@@ -413,7 +413,7 @@ def Location_estimation():
 
         output = list()
         for item in dev_info:
-            output.append({"area_id": area_dict[item["mac01"]],"username": user_dict(item["device_id"]), "device_id": item["dev_id"]})
+            output.append({"area_id": area_dict[item["mac01"]],"username": user_dict[item["device_id"]], "device_id": item["device_id"]})
         
         return jsonify(output), 200
 
