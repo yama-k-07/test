@@ -39,16 +39,16 @@ last_seen_dict = {}
 def load_wifi_reports():
     try:
         response = supabase.table(TABLE_WIFI_REPORTS).select("*").order("id", desc=False).execute()
-        result = {}
-        for row in response.data:
-            device_id = row.get("device_id")
-            result[device_id] = {
-                "username": row.get("username"),
-                "report": row.get("report"),
-                "mac01": row.get("mac01"),
-                "mac02": row.get("mac02"),
-            }
-        return result
+        # result = {}
+        # for row in response.data:
+        #     device_id = row.get("device_id")
+        #     result[device_id] = {
+        #         "username": row.get("username"),
+        #         "report": row.get("report"),
+        #         "mac01": row.get("mac01"),
+        #         "mac02": row.get("mac02"),
+        #     }
+        return response.data
     except Exception as e:
         print(f"Error loading wifi_reports: {e}")
         return {}
@@ -377,20 +377,40 @@ def handle_area_order():
         return jsonify(load_area_order())
 
 
+# @app.route('/api/entry_status', methods=['GET'])
+# def get_entry_status():
+#     global entry_status_table
+#     now = time.time()
+#     timeout_sec = 60
+#     valid_ids = {
+#         device_id for device_id, last_seen in last_seen_dict.items()
+#         if now - last_seen <= timeout_sec
+#     }
+#     active_entries = [
+#         entry for entry in entry_status_table
+#         if entry['device_id'] in valid_ids
+#     ]
+#     return jsonify(active_entries)
+
+
 @app.route('/api/entry_status', methods=['GET'])
 def get_entry_status():
-    global entry_status_table
-    now = time.time()
-    timeout_sec = 60
-    valid_ids = {
-        device_id for device_id, last_seen in last_seen_dict.items()
-        if now - last_seen <= timeout_sec
-    }
-    active_entries = [
-        entry for entry in entry_status_table
-        if entry['device_id'] in valid_ids
-    ]
-    return jsonify(active_entries)
+    dev_info = load_wifi_reports()
+
+    try:
+        response = supabase.table(TABLE_AP_AREA).select("*").execute()
+        area_dict = {}
+        for item in response:
+            area_dict[item["bssid"]] = item["area"]
+
+        output = list()
+        for item in dev_info:
+            output.append({"area_id": area_dict[item["mac01"]],"username": item["username"], "device_id": item["dev_id"]})
+        
+        return output
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/test-deploy")
