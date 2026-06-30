@@ -25,7 +25,8 @@ TABLE_AP_AREA = "ap_areas"
 TABLE_AREA_STATUS = "area_status"
 TABLE_AREA_ORDER = "area_order"
 TABLE_USER = "user"
-TABLE_WIFI_REPORTS = "wifi_reports"
+TABLE_WIFI_LOG = "wifi_reports"
+TABLE_WIFI_REPORTS = "latest_wifi_reports"
 TABLE_AP_POSITIONS = "ap_positions"
 TABLE_AREA_ORDER = "ap_area_order"
 
@@ -38,7 +39,7 @@ last_seen_dict = {}
 
 def load_wifi_reports():
     try:
-        response = supabase.table(TABLE_WIFI_REPORTS).select("*").order("id", desc=False).execute()
+        response = supabase.table(TABLE_WIFI_REPORTS).select("*").execute()
         # result = {}
         # for row in response.data:
         #     device_id = row.get("device_id")
