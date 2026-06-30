@@ -396,25 +396,35 @@ def handle_area_order():
 
 @app.route('/api/entry_status', methods=['GET'])
 def Location_estimation():
-    dev_info = load_wifi_reports()
-    
+    dev_info = load_wifi_reports() or []
+
     try:
         r = supabase.table(TABLE_AP_AREA).select("*").execute()
-        areaT = r.data
+        area_rows = getattr(r, "data", []) or []
         area_dict = {}
-        for item in areaT:
-            area_dict[item["bssid"]] = item["area_id"]
+        for item in area_rows:
+            bssid = item.get("bssid")
+            if bssid is not None:
+                area_dict[bssid] = item.get("area_id") or item.get("area")
 
         r = supabase.table(TABLE_USER).select("*").execute()
-        user = r.data
+        user_rows = getattr(r, "data", []) or []
         user_dict = {}
-        for item in user:
-            user_dict[item["device_id"]] = item["username"]
+        for item in user_rows:
+            device_id = item.get("device_id")
+            if device_id is not None:
+                user_dict[device_id] = item.get("username")
 
-        output = list()
+        output = []
         for item in dev_info:
-            output.append({"area_id": area_dict[item["mac01"]],"username": user_dict[item["device_id"]], "device_id": item["device_id"]})
-        
+            mac = item.get("mac01")
+            device_id = item.get("device_id") or item.get("dev_id")
+            output.append({
+                "area_id": area_dict.get(mac),
+                "username": user_dict.get(device_id),
+                "device_id": device_id,
+            })
+
         return jsonify(output), 200
 
     except Exception as e:
