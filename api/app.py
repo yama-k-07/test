@@ -380,5 +380,29 @@ def get_entry_status():
 def test_deploy():
     return "DEPLOYED-V3-POST-OK"
 
+
+@app.route("/api/debug/wifi_map")
+@login_required
+def debug_wifi_map():
+    try:
+        wifi_raw = supabase.table(TABLE_WIFI_REPORTS).select("*").order("id", desc=True).limit(20).execute()
+        ap_raw   = supabase.table(TABLE_AP_POSITIONS).select("*").execute()
+        ao_raw   = supabase.table(TABLE_AREA_ORDER).select("*").execute()
+
+        wifi_reports = load_wifi_reports()
+        ap_pos       = load_ap_positions()
+        area_order   = load_area_order()
+
+        return jsonify({
+            "wifi_reports_raw":   wifi_raw.data,
+            "ap_positions_raw":   ap_raw.data,
+            "area_order_raw":     ao_raw.data,
+            "load_wifi_reports":  wifi_reports,
+            "load_ap_positions":  ap_pos,
+            "load_area_order":    area_order,
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=5000, debug=False)
