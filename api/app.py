@@ -413,7 +413,7 @@ def Location_estimation():
             if device_id is not None:
                 user_dict[device_id] = item.get("username")
 
-        return jsonify(user_dict), 500
+        return jsonify(r), 500
         
         output = []
         for item in dev_info:
