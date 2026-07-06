@@ -203,7 +203,7 @@ def handle_area_status():
                 'area_status': response.data
             })
         except Exception as e:
-            return jsonify({'error': f'Supabaseの更新に失敗しました: {str(e)}'}), 500
+            return jsonify({'error': f'Supabaseの更新に失敗しました: {str(e)}  data{str(data)}'}), 500
     else:
         try:
             response = supabase.table(TABLE_AREA_STATUS).select("instruction, fire, area_id").execute()
