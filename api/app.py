@@ -408,12 +408,10 @@ def Location_estimation():
         r = supabase.table(TABLE_USER).select("*").execute()
         user_rows = getattr(r, "data", []) or []
         user_dict = {}
-        for u in user_rows:
-            device_id = u.get("device_id")
+        for item in user_rows:
+            device_id = item.get("device_id")
             if device_id is not None:
-                user_dict[device_id] = u.get("username")
-
-        # return jsonify(user_rows), 500
+                user_dict[device_id] = item.get("username")
         
         output = []
         for item in dev_info:
