@@ -397,23 +397,23 @@ def Location_estimation():
     dev_info = load_wifi_reports() or []
 
     try:
-        # r = supabase.table(TABLE_AP_AREA).select("*").execute()
-        # area_rows = getattr(r, "data", []) or []
-        # area_dict = {}
-        # for item in area_rows:
-        #     bssid = item.get("bssid")
-        #     if bssid is not None:
-        #         area_dict[bssid] = item.get("area_id") or item.get("area")
+        r = supabase.table(TABLE_AP_AREA).select("*").execute()
+        area_rows = getattr(r, "data", []) or []
+        area_dict = {}
+        for item in area_rows:
+            bssid = item.get("bssid")
+            if bssid is not None:
+                area_dict[bssid] = item.get("area_id") or item.get("area")
 
         r = supabase.table(TABLE_USER).select("*").execute()
         user_rows = getattr(r, "data", []) or []
         user_dict = {}
-        for item in user_rows:
-            device_id = item.get("device_id")
+        for u in user_rows:
+            device_id = u.get("device_id")
             if device_id is not None:
-                user_dict[device_id] = item.get("username")
+                user_dict[device_id] = u.get("username")
 
-        return jsonify(user_rows), 500
+        # return jsonify(user_rows), 500
         
         output = []
         for item in dev_info:
