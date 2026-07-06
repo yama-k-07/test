@@ -14,9 +14,10 @@ url = os.environ.get("SUPABASE_URL")
 key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
 supabase: Client = create_client(url, key)
 
-TABLE_AP_AREA = "ap_areas"
-TABLE_AREA_STATUS = "area_status"
-TABLE_AREA_ORDER = "ap_area_order"
+# TABLE_AP_AREA = "ap_areas"
+# TABLE_AREA_STATUS = "area_status"
+TABLE_AREA_STATUS = "area_status_v2"
+# TABLE_AREA_ORDER = "ap_area_order"
 TABLE_USER = "user"
 TABLE_WIFI_LOG = "wifi_reports"
 TABLE_WIFI_REPORTS = "latest_wifi_reports"
@@ -67,7 +68,7 @@ def load_user_table():
 
 def load_area_table():
     try:
-        response = supabase.table(TABLE_AP_AREA).select("*").execute()
+        response = supabase.table(TABLE_AREA_STATUS).select("bssid, area_id").execute()
         return response.data
     except Exception as e:
         print(f"Error loading area table: {e}")
@@ -76,7 +77,7 @@ def load_area_table():
 
 def load_area_order():
     try:
-        response = supabase.table(TABLE_AREA_ORDER).select("area_id").order("sort_order", desc=False).execute()
+        response = supabase.table(TABLE_AREA_STATUS).select("area_id").order("area_order", desc=False).execute()
         if response.data:
             return [item["area_id"] for item in response.data]
         fallback = supabase.table(TABLE_AREA_STATUS).select("area_id").execute()
@@ -202,10 +203,10 @@ def handle_area_status():
                 'area_status': response.data
             })
         except Exception as e:
-            return jsonify({'error': f'Supabaseの更新に失敗しました: {str(e)}'}), 500
+            return jsonify({'error': f'Supabaseの更新に失敗しました: {str(e)}  data{str(data)}'}), 500
     else:
         try:
-            response = supabase.table(TABLE_AREA_STATUS).select("*").execute()
+            response = supabase.table(TABLE_AREA_STATUS).select("instruction, fire, area_id").execute()
             return jsonify(response.data)
         except Exception as e:
             return jsonify({'error': f'Supabaseからのデータ取得に失敗しました: {str(e)}'}), 500
@@ -258,7 +259,7 @@ def handle_area():
             return jsonify({'error': 'BSSIDが入力されていません。'}), 400
         
         try:
-            supabase.table(TABLE_AP_AREA).upsert(data).execute()
+            supabase.table(TABLE_AREA_STATUS).upsert(data).execute()
             return jsonify({'message': 'Area master updated in Supabase'})
         except Exception as e:
             return jsonify({'error': str(e)}), 500
@@ -275,7 +276,7 @@ def delete_area():
 
     try:
         # Supabaseのテーブルから、該当するarea_idの行を削除
-        supabase.table(TABLE_AP_AREA).delete().eq("area_id", target_area).execute()
+        supabase.table(TABLE_AREA_STATUS).delete().eq("area_id", target_area).execute()
         return jsonify({'message': 'deleted from Supabase', 'area_table': load_area_table()})
     except Exception as e:
         return jsonify({'error': f'Supabaseからの削除に失敗しました: {str(e)}'}), 500
@@ -366,9 +367,9 @@ def get_wifi_map():
 def handle_area_order():
     if request.method == "POST":
         data = request.json  # array of area_id strings: ["入口", "100m", ...]
-        records = [{"area_id": aid, "sort_order": i} for i, aid in enumerate(data)]
+        records = [{"area_id": aid, "area_order": i} for i, aid in enumerate(data)]
         try:
-            supabase.table(TABLE_AREA_ORDER).upsert(records).execute()
+            supabase.table(TABLE_AREA_STATUS).upsert(records).execute()
             return jsonify({"message": "area order saved"})
         except Exception as e:
             return jsonify({"error": str(e)}), 500
@@ -397,7 +398,7 @@ def Location_estimation():
     dev_info = load_wifi_reports() or []
 
     try:
-        r = supabase.table(TABLE_AP_AREA).select("*").execute()
+        r = supabase.table(TABLE_AREA_STATUS).select("bssid, area_id").execute()
         area_rows = getattr(r, "data", []) or []
         area_dict = {}
         for item in area_rows:
@@ -438,9 +439,9 @@ def test_deploy():
 @login_required
 def debug_wifi_map():
     try:
-        wifi_raw = supabase.table(TABLE_LATEST_WIFI_REPORTS).select("*").execute()
+        wifi_raw = supabase.table(TABLE_WIFI_REPORTS).select("*").execute()
         ap_raw   = supabase.table(TABLE_AP_POSITIONS).select("*").execute()
-        ao_raw   = supabase.table(TABLE_AREA_ORDER).select("*").execute()
+        ao_raw   = supabase.table(TABLE_AREA_STATUS).select("area_id, area_order").execute()
 
         wifi_reports = load_wifi_reports()
         ap_pos       = load_ap_positions()
