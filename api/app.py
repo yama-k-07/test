@@ -35,21 +35,20 @@ last_seen_dict = {}
 # ==========================================
 
 def load_wifi_reports():
+    """wifi_reports から device_id ごとの最新レコードを返す（同一APに複数デバイスがいても全員返す）"""
     try:
-        response = supabase.table(TABLE_WIFI_REPORTS).select("*").execute()
-        # result = {}
-        # for row in response.data:
-        #     device_id = row.get("device_id")
-        #     result[device_id] = {
-        #         "username": row.get("username"),
-        #         "report": row.get("report"),
-        #         "mac01": row.get("mac01"),
-        #         "mac02": row.get("mac02"),
-        #     }
-        return response.data
+        response = supabase.table(TABLE_WIFI_LOG).select("*").order("id", desc=True).execute()
+        seen = set()
+        result = []
+        for row in (response.data or []):
+            did = row.get('device_id')
+            if did and did not in seen:
+                seen.add(did)
+                result.append(row)
+        return result
     except Exception as e:
         print(f"Error loading wifi_reports: {e}")
-        return {}
+        return []
 
 
 def load_ap_positions():
