@@ -325,6 +325,8 @@ def get_wifi_map():
     ap_pos = load_ap_positions()
     area_order = load_area_order()
 
+    user_map = {u['device_id']: u['username'] for u in (load_user_table() or []) if u.get('device_id') and u.get('username')}
+
     workers = []
     for row in (reports or []):
         device_id = row.get('device_id')
@@ -350,7 +352,7 @@ def get_wifi_map():
 
         workers.append({
             'device_id': device_id,
-            'username': row.get('username'),
+            'username': user_map.get(device_id),
             'report': row.get('report'),
             'ratio': round(ratio, 4),
             'area_id': area_id,
