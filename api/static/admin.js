@@ -546,6 +546,7 @@ document.addEventListener('DOMContentLoaded', () => {
     loadAreaMapTable();
     loadUserTable();
     loadEntryManagement();
+    loadTunnelMap();
   }, 5000);
 });
 
