@@ -535,16 +535,17 @@ document.addEventListener('DOMContentLoaded', () => {
   loadAreaBoard();
   loadAreaMapTable();
   loadUserTable();
-  loadEntryTable();
   loadTunnelMap();
   loadApPositionsTable();
+  loadEntryManagement();
+  loadEntryApConfig();
 
   setInterval(() => {
     if (isEditing) return;
     loadAreaBoard();
-    loadEntryTable();
     loadAreaMapTable();
     loadUserTable();
+    loadEntryManagement();
   }, 5000);
 });
 
@@ -786,6 +787,162 @@ function removeApPositionRow(button) {
     return;
   }
   fetch('/api/ap_positions', {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mac })
+  }).then(res => {
+    if (res.ok) row.remove();
+    else alert('削除失敗');
+  });
+}
+
+
+// ======== 入場管理 ========
+async function loadEntryManagement() {
+  try {
+    const [mgmtRes, logRes] = await Promise.all([
+      fetch('/api/entry_management'),
+      fetch('/api/entry_log?limit=30')
+    ]);
+    if (mgmtRes.ok) {
+      const data = await mgmtRes.json();
+      renderEntryCurrentTable(data.status || []);
+    }
+    if (logRes.ok) {
+      const logData = await logRes.json();
+      renderEntryLogTable(logData);
+    }
+  } catch (e) {
+    console.error('loadEntryManagement error:', e);
+  }
+}
+
+function renderEntryCurrentTable(statusList) {
+  const body = document.getElementById('entryCurrentBody');
+  if (!body) return;
+  body.innerHTML = '';
+
+  const inList = statusList.filter(s => s.status === 'in');
+  const outList = statusList.filter(s => s.status !== 'in');
+  [...inList, ...outList].forEach(item => {
+    const row = document.createElement('tr');
+    const label = item.username || item.device_id || '?';
+    const isIn = item.status === 'in';
+    row.innerHTML = `
+      <td>${label}</td>
+      <td><span class="entry-badge ${isIn ? 'entry-in' : 'entry-out'}">${isIn ? '入場中' : '退場'}</span></td>
+      <td>${formatEntryTime(item.entry_time)}</td>
+      <td>${formatEntryTime(item.exit_time)}</td>
+    `;
+    body.appendChild(row);
+  });
+
+  if (statusList.length === 0) {
+    const row = document.createElement('tr');
+    row.innerHTML = '<td colspan="4" style="text-align:center;color:grey;">データなし（入場APを設定してください）</td>';
+    body.appendChild(row);
+  }
+}
+
+function renderEntryLogTable(logList) {
+  const body = document.getElementById('entryLogBody');
+  if (!body) return;
+  body.innerHTML = '';
+  (logList || []).forEach(item => {
+    const row = document.createElement('tr');
+    const label = item.username || item.device_id || '?';
+    const isEnter = item.event_type === 'enter';
+    row.innerHTML = `
+      <td>${label}</td>
+      <td><span class="entry-badge ${isEnter ? 'entry-in' : 'entry-out'}">${isEnter ? '入場' : '退場'}</span></td>
+      <td>${formatEntryTime(item.event_time)}</td>
+    `;
+    body.appendChild(row);
+  });
+  if (!logList || logList.length === 0) {
+    const row = document.createElement('tr');
+    row.innerHTML = '<td colspan="3" style="text-align:center;color:grey;">ログなし</td>';
+    body.appendChild(row);
+  }
+}
+
+function formatEntryTime(isoStr) {
+  if (!isoStr) return '-';
+  const d = new Date(isoStr);
+  const mo = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  const ss = String(d.getSeconds()).padStart(2, '0');
+  return `${mo}/${dd} ${hh}:${mm}:${ss}`;
+}
+
+// ======== 入場AP設定 ========
+async function loadEntryApConfig() {
+  const body = document.getElementById('entryApTableBody');
+  if (!body) return;
+  try {
+    const res = await fetch('/api/entry_ap_config');
+    if (!res.ok) return;
+    const list = await res.json();
+    body.innerHTML = '';
+    (Array.isArray(list) ? list : []).forEach(item => {
+      const row = document.createElement('tr');
+      row.dataset.originalMac = item.mac || '';
+      row.innerHTML = `
+        <td><input class="input" type="text" value="${item.mac}"></td>
+        <td><input class="input" type="text" value="${item.label || ''}"></td>
+        <td><button class="button is-danger" onclick="removeEntryApRow(this)">削除</button></td>
+      `;
+      body.appendChild(row);
+    });
+  } catch (e) {
+    console.error('loadEntryApConfig error:', e);
+  }
+}
+
+function addEntryApRow() {
+  const body = document.getElementById('entryApTableBody');
+  const row = document.createElement('tr');
+  row.innerHTML = `
+    <td><input class="input" type="text" placeholder="AA:BB:CC:DD:EE:FF"></td>
+    <td><input class="input" type="text" placeholder="入口ゲート"></td>
+    <td><button class="button is-danger" onclick="removeEntryApRow(this)">削除</button></td>
+  `;
+  body.appendChild(row);
+}
+
+async function saveEntryApConfig() {
+  const rows = document.querySelectorAll('#entryApTableBody tr');
+  const errors = [];
+  for (const row of rows) {
+    const inputs = row.querySelectorAll('input');
+    const mac = inputs[0] ? inputs[0].value.trim() : '';
+    const label = inputs[1] ? inputs[1].value.trim() : '';
+    if (!mac) continue;
+    const res = await fetch('/api/entry_ap_config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mac, label })
+    });
+    if (!res.ok) {
+      const b = await res.json().catch(() => ({}));
+      errors.push(`${mac}: ${b.error || res.status}`);
+    }
+  }
+  if (errors.length > 0) {
+    alert('保存に失敗しました:\n' + errors.join('\n'));
+  } else {
+    alert('入場AP設定を保存しました');
+  }
+  loadEntryApConfig();
+}
+
+function removeEntryApRow(button) {
+  const row = button.closest('tr');
+  const mac = row.dataset.originalMac || row.querySelector('input')?.value;
+  if (!mac) { row.remove(); return; }
+  fetch('/api/entry_ap_config', {
     method: 'DELETE',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ mac })

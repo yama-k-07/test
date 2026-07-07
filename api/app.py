@@ -1,6 +1,7 @@
 from flask import Flask, request, jsonify, render_template, redirect, url_for, session
 from supabase import create_client, Client
 from functools import wraps
+from datetime import datetime, timezone
 import threading
 import json
 import os
@@ -22,6 +23,9 @@ TABLE_USER = "user"
 TABLE_WIFI_LOG = "wifi_reports"
 TABLE_WIFI_REPORTS = "latest_wifi_reports"
 TABLE_AP_POSITIONS = "ap_positions"
+TABLE_ENTRY_AP_CONFIG = "entry_ap_config"
+TABLE_ENTRY_CURRENT = "entry_current"
+TABLE_ENTRY_LOG = "entry_log"
 
 entry_status_table = []
 last_seen_dict = {}
@@ -73,6 +77,10 @@ def load_area_table():
     except Exception as e:
         print(f"Error loading area table: {e}")
         return []
+
+
+def now_iso():
+    return datetime.now(timezone.utc).isoformat()
 
 
 def load_area_order():
@@ -435,6 +443,127 @@ def Location_estimation():
 @app.route("/test-deploy")
 def test_deploy():
     return "DEPLOYED-V3-POST-OK"
+
+
+def load_entry_ap_config():
+    try:
+        response = supabase.table(TABLE_ENTRY_AP_CONFIG).select("mac").execute()
+        return {row["mac"] for row in (response.data or [])}
+    except Exception as e:
+        print(f"Error loading entry_ap_config: {e}")
+        return set()
+
+
+def do_entry_status_update():
+    """latest_wifi_reports を元に入退場を検出し entry_current / entry_log を更新する"""
+    entry_ap_macs = load_entry_ap_config()
+    reports = load_wifi_reports() or []
+    user_map = {
+        u['device_id']: u['username']
+        for u in (load_user_table() or [])
+        if u.get('device_id') and u.get('username')
+    }
+
+    try:
+        cur_res = supabase.table(TABLE_ENTRY_CURRENT).select("*").execute()
+        current_status = {row['device_id']: row for row in (cur_res.data or [])}
+    except Exception as e:
+        print(f"Error loading entry_current: {e}")
+        current_status = {}
+
+    now = now_iso()
+
+    for row in reports:
+        device_id = row.get('device_id')
+        if not device_id:
+            continue
+        mac1 = row.get('mac01') or ''
+        mac2 = row.get('mac02') or ''
+        at_entry = bool(entry_ap_macs) and (mac1 in entry_ap_macs or mac2 in entry_ap_macs)
+
+        prev = current_status.get(device_id, {})
+        prev_status = prev.get('status', 'out')
+        username = user_map.get(device_id)
+
+        if at_entry and prev_status != 'in':
+            supabase.table(TABLE_ENTRY_CURRENT).upsert({
+                'device_id': device_id, 'username': username,
+                'status': 'in', 'entry_time': now, 'exit_time': None, 'updated_at': now,
+            }).execute()
+            supabase.table(TABLE_ENTRY_LOG).insert({
+                'device_id': device_id, 'username': username,
+                'event_type': 'enter', 'event_time': now,
+            }).execute()
+
+        elif not at_entry and prev_status == 'in':
+            supabase.table(TABLE_ENTRY_CURRENT).upsert({
+                'device_id': device_id, 'username': username,
+                'status': 'out', 'entry_time': prev.get('entry_time'),
+                'exit_time': now, 'updated_at': now,
+            }).execute()
+            supabase.table(TABLE_ENTRY_LOG).insert({
+                'device_id': device_id, 'username': username,
+                'event_type': 'exit', 'event_time': now,
+            }).execute()
+
+    try:
+        res = supabase.table(TABLE_ENTRY_CURRENT).select("*").execute()
+        return res.data or []
+    except Exception as e:
+        print(f"Error fetching entry_current: {e}")
+        return []
+
+
+@app.route('/api/entry_ap_config', methods=['GET', 'POST', 'DELETE'])
+@login_required
+def handle_entry_ap_config():
+    if request.method == 'GET':
+        try:
+            res = supabase.table(TABLE_ENTRY_AP_CONFIG).select("*").execute()
+            return jsonify(res.data or [])
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+    elif request.method == 'POST':
+        data = request.json or {}
+        mac = data.get('mac', '').strip()
+        if not mac:
+            return jsonify({'error': 'mac が必要です'}), 400
+        try:
+            supabase.table(TABLE_ENTRY_AP_CONFIG).upsert({'mac': mac, 'label': data.get('label', '')}).execute()
+            return jsonify({'message': 'saved'})
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+    else:
+        data = request.json or {}
+        mac = data.get('mac', '').strip()
+        if not mac:
+            return jsonify({'error': 'mac が必要です'}), 400
+        try:
+            supabase.table(TABLE_ENTRY_AP_CONFIG).delete().eq('mac', mac).execute()
+            return jsonify({'message': 'deleted'})
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/entry_management', methods=['GET'])
+@login_required
+def get_entry_management():
+    try:
+        status_list = do_entry_status_update()
+        return jsonify({'status': status_list})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/entry_log', methods=['GET'])
+@login_required
+def get_entry_log():
+    try:
+        limit = min(int(request.args.get('limit', 50)), 200)
+        res = supabase.table(TABLE_ENTRY_LOG).select("*").order("event_time", desc=True).limit(limit).execute()
+        return jsonify(res.data or [])
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 
 @app.route("/api/debug/wifi_map")

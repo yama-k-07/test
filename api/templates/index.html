@@ -36,7 +36,65 @@
       <canvas id="tunnelMap"></canvas>
     </section>
 
+    <section class="box">
+      <h2 class="subtitle">入場管理</h2>
+      <div class="entry-status-grid">
+        <div>
+          <p class="entry-section-label">現在の入場状況</p>
+          <div class="table-container">
+            <table class="table is-fullwidth is-size-7">
+              <thead>
+                <tr>
+                  <th>名前</th>
+                  <th>状態</th>
+                  <th>入場時刻</th>
+                  <th>退場時刻</th>
+                </tr>
+              </thead>
+              <tbody id="entryCurrentBody"></tbody>
+            </table>
+          </div>
+        </div>
+        <div>
+          <p class="entry-section-label">入場ログ（直近）</p>
+          <div class="table-container entry-log-scroll">
+            <table class="table is-fullwidth is-size-7">
+              <thead>
+                <tr>
+                  <th>名前</th>
+                  <th>イベント</th>
+                  <th>時刻</th>
+                </tr>
+              </thead>
+              <tbody id="entryLogBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <div class="settings-container">
+
+      <section class="box column-box">
+        <h2 class="subtitle">入場AP設定</h2>
+        <p style="font-size:12px; margin-bottom:8px;">入場と判定するAPのMACアドレスを設定します。このAPを検知したデバイスを「入場中」とします。</p>
+        <div class="table-container">
+          <table class="table is-fullwidth">
+            <thead>
+              <tr>
+                <th>MACアドレス</th>
+                <th>ラベル</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="entryApTableBody"></tbody>
+          </table>
+        </div>
+        <div class="buttons mt-2">
+          <button class="button is-primary" onclick="addEntryApRow()">新規追加</button>
+          <button class="button is-success" onclick="saveEntryApConfig()">保存</button>
+        </div>
+      </section>
 
       <section class="box column-box">
         <h2 class="subtitle">AP位置設定</h2>

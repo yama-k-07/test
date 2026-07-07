@@ -475,3 +475,50 @@ tr.is-alerting td {
   height: 200px;
   image-rendering: pixelated;
 }
+
+/* 入場管理 */
+.entry-status-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+}
+
+@media (max-width: 900px) {
+  .entry-status-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.entry-section-label {
+  font-size: 13px;
+  font-weight: bold;
+  color: var(--pixel-dark-solid);
+  margin-bottom: 6px;
+  border-left: 4px solid var(--pixel-green);
+  padding-left: 8px;
+}
+
+.entry-log-scroll {
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.entry-badge {
+  display: inline-block;
+  font-family: 'DotGothic16', sans-serif;
+  font-size: 11px;
+  padding: 2px 8px;
+  border: 2px solid;
+}
+
+.entry-badge.entry-in {
+  color: var(--pixel-green);
+  border-color: var(--pixel-green);
+  background: rgba(45, 150, 16, 0.1);
+}
+
+.entry-badge.entry-out {
+  color: #888;
+  border-color: #bbb;
+  background: rgba(0, 0, 0, 0.04);
+}
