@@ -660,7 +660,7 @@ function renderTunnelMap(data) {
     ctx.fillStyle = C_DARK;
     ctx.font = FONT_SM;
     ctx.textAlign = 'center';
-    ctx.fillText(ap_labels[i] !== undefined ? `${ap_labels[i]}m` : `AP${i}`, x, y + 16);
+    ctx.fillText(ap_labels[i] !== undefined ? `AP${ap_labels[i]}` : `AP${i}`, x, y + 16);
   }
 
   // 作業者の円（衝突を避けてY方向にずらす）
