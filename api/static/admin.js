@@ -746,6 +746,14 @@ function renderTunnelMap(data) {
 
 
 // ======== AP位置設定 ========
+const AP_LABELS = ['1', '3', '4', '5', '6', '11'];
+
+function apPositionOptions(selectedPos) {
+  return AP_LABELS.map((label, i) =>
+    `<option value="${i}" ${i === selectedPos ? 'selected' : ''}>AP${label}</option>`
+  ).join('');
+}
+
 async function loadApPositionsTable() {
   const body = document.getElementById('apPositionsTableBody');
   if (!body) return;
@@ -764,7 +772,7 @@ async function loadApPositionsTable() {
       row.dataset.originalMac = item.mac || '';
       row.innerHTML = `
         <td><input class="input" type="text" value="${item.mac}"></td>
-        <td><input class="input" type="number" min="0" max="5" value="${item.position}" style="width:80px;"></td>
+        <td><select class="select ap-position-select">${apPositionOptions(item.position)}</select></td>
         <td><button class="button is-danger" onclick="removeApPositionRow(this)">削除</button></td>
       `;
       body.appendChild(row);
@@ -779,7 +787,7 @@ function addApPositionRow() {
   const row = document.createElement('tr');
   row.innerHTML = `
     <td><input class="input" type="text" placeholder="AA:BB:CC:DD:EE:FF"></td>
-    <td><input class="input" type="number" min="0" max="5" placeholder="0〜5" style="width:80px;"></td>
+    <td><select class="select ap-position-select">${apPositionOptions(0)}</select></td>
     <td><button class="button is-danger" onclick="removeApPositionRow(this)">削除</button></td>
   `;
   body.appendChild(row);
@@ -790,9 +798,10 @@ async function saveApPositionsTable() {
   const errors = [];
 
   for (const row of rows) {
-    const inputs = row.querySelectorAll('input');
-    const mac = inputs[0] ? inputs[0].value.trim() : '';
-    const pos = inputs[1] ? parseInt(inputs[1].value) : NaN;
+    const macInput = row.querySelector('input');
+    const posSelect = row.querySelector('select.ap-position-select');
+    const mac = macInput ? macInput.value.trim() : '';
+    const pos = posSelect ? parseInt(posSelect.value) : NaN;
     if (!mac || isNaN(pos)) continue;
 
     const res = await fetch('/api/ap_positions', {
