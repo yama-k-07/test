@@ -347,15 +347,15 @@ def get_wifi_map():
         pos1 = ap_pos.get(mac1)
         pos2 = ap_pos.get(mac2)
 
-        if pos1 is None:
+        if pos1 is None and pos2 is None:
             continue
 
-        r1 = pos1 / (AP_COUNT - 1)
-        if pos2 is not None:
-            r2 = pos2 / (AP_COUNT - 1)
-            ratio = (r1 + r2) / 2
+        if pos1 is not None and pos2 is not None:
+            ratio = (pos1 / (AP_COUNT - 1) + pos2 / (AP_COUNT - 1)) / 2
+        elif pos1 is not None:
+            ratio = pos1 / (AP_COUNT - 1)
         else:
-            ratio = r1
+            ratio = pos2 / (AP_COUNT - 1)
 
         n = len(area_order)
         area_idx = min(int(ratio * n), n - 1) if n > 0 else 0
