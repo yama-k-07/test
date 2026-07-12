@@ -1,11 +1,14 @@
 from flask import Flask, request, jsonify, render_template, redirect, url_for, session
 from supabase import create_client, Client
+from dotenv import load_dotenv
 from functools import wraps
 from datetime import datetime, timezone
 import threading
 import json
 import os
 import time
+
+load_dotenv()
 
 app = Flask(__name__)
 app.secret_key = 'mamotchi_secret_key_pixel'
@@ -327,7 +330,8 @@ def handle_ap_positions():
 @app.route('/api/wifi_map', methods=['GET'])
 @login_required
 def get_wifi_map():
-    AP_COUNT = 5
+    AP_COUNT = 6
+    AP_LABELS = ['1', '3', '4', '5', '6', '11']
     reports = load_wifi_reports()
     ap_pos = load_ap_positions()
     area_order = load_area_order()
@@ -368,6 +372,7 @@ def get_wifi_map():
     return jsonify({
         'workers': workers,
         'ap_count': AP_COUNT,
+        'ap_labels': AP_LABELS,
         'area_order': area_order,
     })
 

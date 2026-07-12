@@ -562,8 +562,25 @@ function loadTunnelMap() {
     .then(data => {
       lastWifiMapData = data;
       renderTunnelMap(data);
+      if ((data.workers || []).some(w => w.report)) startReportGlowLoop();
     })
     .catch(e => console.error('wifi_map取得エラー:', e));
+}
+
+// 通報中（report: true）のデバイスがいる間だけ、赤い光を明滅させ続けるループ
+let reportGlowRafId = null;
+function startReportGlowLoop() {
+  if (reportGlowRafId) return;
+  const tick = () => {
+    const hasReport = lastWifiMapData && (lastWifiMapData.workers || []).some(w => w.report);
+    if (!hasReport) {
+      reportGlowRafId = null;
+      return;
+    }
+    renderTunnelMap(lastWifiMapData);
+    reportGlowRafId = requestAnimationFrame(tick);
+  };
+  reportGlowRafId = requestAnimationFrame(tick);
 }
 
 function renderTunnelMap(data) {
@@ -576,7 +593,7 @@ function renderTunnelMap(data) {
   canvas.height = H;
 
   const ctx = canvas.getContext('2d');
-  const { workers = [], ap_count = 5, area_order = [] } = data;
+  const { workers = [], ap_count = 6, ap_labels = [], area_order = [] } = data;
 
   const PAD_X = 40;
   const PAD_TOP = 28;
@@ -643,7 +660,7 @@ function renderTunnelMap(data) {
     ctx.fillStyle = C_DARK;
     ctx.font = FONT_SM;
     ctx.textAlign = 'center';
-    ctx.fillText(`AP${i}`, x, y + 16);
+    ctx.fillText(ap_labels[i] !== undefined ? `${ap_labels[i]}m` : `AP${i}`, x, y + 16);
   }
 
   // 作業者の円（衝突を避けてY方向にずらす）
@@ -673,7 +690,24 @@ function renderTunnelMap(data) {
     placed.push({ cx: w.cx, cy: w.cy });
   });
 
+  const now = performance.now();
   wList.forEach(w => {
+    if (w.report) {
+      // パルスするグロー（発光）を丸の外側に描画
+      const pulse = (Math.sin(now / 250) + 1) / 2; // 0〜1
+      const glowR = R + 8 + pulse * 12;
+      const grad = ctx.createRadialGradient(w.cx, w.cy, R * 0.5, w.cx, w.cy, glowR);
+      grad.addColorStop(0, 'rgba(255,75,43,0.55)');
+      grad.addColorStop(1, 'rgba(255,75,43,0)');
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(w.cx, w.cy, glowR, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.shadowColor = C_RED;
+      ctx.shadowBlur = 10 + pulse * 16;
+    }
+
     ctx.fillStyle = w.report ? C_RED : C_GREEN;
     ctx.strokeStyle = C_DARK;
     ctx.lineWidth = 2;
@@ -681,6 +715,7 @@ function renderTunnelMap(data) {
     ctx.arc(w.cx, w.cy, R, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
+    ctx.shadowBlur = 0;
     const label = (w.username || w.device_id || '?').slice(0, 6);
     ctx.fillStyle = '#fff';
     ctx.font = FONT_SM;
@@ -729,7 +764,7 @@ async function loadApPositionsTable() {
       row.dataset.originalMac = item.mac || '';
       row.innerHTML = `
         <td><input class="input" type="text" value="${item.mac}"></td>
-        <td><input class="input" type="number" min="0" max="4" value="${item.position}" style="width:80px;"></td>
+        <td><input class="input" type="number" min="0" max="5" value="${item.position}" style="width:80px;"></td>
         <td><button class="button is-danger" onclick="removeApPositionRow(this)">削除</button></td>
       `;
       body.appendChild(row);
@@ -744,7 +779,7 @@ function addApPositionRow() {
   const row = document.createElement('tr');
   row.innerHTML = `
     <td><input class="input" type="text" placeholder="AA:BB:CC:DD:EE:FF"></td>
-    <td><input class="input" type="number" min="0" max="4" placeholder="0〜4" style="width:80px;"></td>
+    <td><input class="input" type="number" min="0" max="5" placeholder="0〜5" style="width:80px;"></td>
     <td><button class="button is-danger" onclick="removeApPositionRow(this)">削除</button></td>
   `;
   body.appendChild(row);
