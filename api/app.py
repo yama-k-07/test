@@ -26,7 +26,6 @@ TABLE_USER = "user"
 TABLE_WIFI_LOG = "wifi_reports"
 TABLE_WIFI_REPORTS = "latest_wifi_reports"
 TABLE_AP_POSITIONS = "ap_positions"
-TABLE_ENTRY_AP_CONFIG = "entry_ap_config"
 TABLE_ENTRY_CURRENT = "entry_current"
 TABLE_ENTRY_LOG = "entry_log"
 
@@ -525,37 +524,6 @@ def do_entry_status_update():
     except Exception as e:
         print(f"Error fetching entry_current: {e}")
         return []
-
-
-@app.route('/api/entry_ap_config', methods=['GET', 'POST', 'DELETE'])
-@login_required
-def handle_entry_ap_config():
-    if request.method == 'GET':
-        try:
-            res = supabase.table(TABLE_ENTRY_AP_CONFIG).select("*").execute()
-            return jsonify(res.data or [])
-        except Exception as e:
-            return jsonify({'error': str(e)}), 500
-    elif request.method == 'POST':
-        data = request.json or {}
-        mac = data.get('mac', '').strip()
-        if not mac:
-            return jsonify({'error': 'mac が必要です'}), 400
-        try:
-            supabase.table(TABLE_ENTRY_AP_CONFIG).upsert({'mac': mac, 'label': data.get('label', '')}).execute()
-            return jsonify({'message': 'saved'})
-        except Exception as e:
-            return jsonify({'error': str(e)}), 500
-    else:
-        data = request.json or {}
-        mac = data.get('mac', '').strip()
-        if not mac:
-            return jsonify({'error': 'mac が必要です'}), 400
-        try:
-            supabase.table(TABLE_ENTRY_AP_CONFIG).delete().eq('mac', mac).execute()
-            return jsonify({'message': 'deleted'})
-        except Exception as e:
-            return jsonify({'error': str(e)}), 500
 
 
 @app.route('/api/entry_management', methods=['GET'])

@@ -538,7 +538,6 @@ document.addEventListener('DOMContentLoaded', () => {
   loadTunnelMap();
   loadApPositionsTable();
   loadEntryManagement();
-  loadEntryApConfig();
 
   setInterval(() => {
     if (isEditing) return;
@@ -922,80 +921,6 @@ function formatEntryTime(isoStr) {
   return `${mo}/${dd} ${hh}:${mm}:${ss}`;
 }
 
-// ======== 入場AP設定 ========
-async function loadEntryApConfig() {
-  const body = document.getElementById('entryApTableBody');
-  if (!body) return;
-  try {
-    const res = await fetch('/api/entry_ap_config');
-    if (!res.ok) return;
-    const list = await res.json();
-    body.innerHTML = '';
-    (Array.isArray(list) ? list : []).forEach(item => {
-      const row = document.createElement('tr');
-      row.dataset.originalMac = item.mac || '';
-      row.innerHTML = `
-        <td><input class="input" type="text" value="${item.mac}"></td>
-        <td><input class="input" type="text" value="${item.label || ''}"></td>
-        <td><button class="button is-danger" onclick="removeEntryApRow(this)">削除</button></td>
-      `;
-      body.appendChild(row);
-    });
-  } catch (e) {
-    console.error('loadEntryApConfig error:', e);
-  }
-}
-
-function addEntryApRow() {
-  const body = document.getElementById('entryApTableBody');
-  const row = document.createElement('tr');
-  row.innerHTML = `
-    <td><input class="input" type="text" placeholder="AA:BB:CC:DD:EE:FF"></td>
-    <td><input class="input" type="text" placeholder="入口ゲート"></td>
-    <td><button class="button is-danger" onclick="removeEntryApRow(this)">削除</button></td>
-  `;
-  body.appendChild(row);
-}
-
-async function saveEntryApConfig() {
-  const rows = document.querySelectorAll('#entryApTableBody tr');
-  const errors = [];
-  for (const row of rows) {
-    const inputs = row.querySelectorAll('input');
-    const mac = inputs[0] ? inputs[0].value.trim() : '';
-    const label = inputs[1] ? inputs[1].value.trim() : '';
-    if (!mac) continue;
-    const res = await fetch('/api/entry_ap_config', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mac, label })
-    });
-    if (!res.ok) {
-      const b = await res.json().catch(() => ({}));
-      errors.push(`${mac}: ${b.error || res.status}`);
-    }
-  }
-  if (errors.length > 0) {
-    alert('保存に失敗しました:\n' + errors.join('\n'));
-  } else {
-    alert('入場AP設定を保存しました');
-  }
-  loadEntryApConfig();
-}
-
-function removeEntryApRow(button) {
-  const row = button.closest('tr');
-  const mac = row.dataset.originalMac || row.querySelector('input')?.value;
-  if (!mac) { row.remove(); return; }
-  fetch('/api/entry_ap_config', {
-    method: 'DELETE',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ mac })
-  }).then(res => {
-    if (res.ok) row.remove();
-    else alert('削除失敗');
-  });
-}
 
 
 // チェックボックスの状態が変わった時に背景色を変える関数
