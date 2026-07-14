@@ -2,7 +2,7 @@ from flask import Flask, request, jsonify, render_template, redirect, url_for, s
 from supabase import create_client, Client
 from dotenv import load_dotenv
 from functools import wraps
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import threading
 import json
 import os
@@ -83,6 +83,16 @@ def load_area_table():
 
 def now_iso():
     return datetime.now(timezone.utc).isoformat()
+
+
+JST = timezone(timedelta(hours=9))
+
+
+def jst_today_utc_bounds():
+    """日本時間で「今日」の0時〜24時をUTCのISO文字列範囲で返す"""
+    start_jst = datetime.now(JST).replace(hour=0, minute=0, second=0, microsecond=0)
+    end_jst = start_jst + timedelta(days=1)
+    return start_jst.astimezone(timezone.utc).isoformat(), end_jst.astimezone(timezone.utc).isoformat()
 
 
 def load_area_order():
@@ -511,7 +521,14 @@ def do_entry_status_update():
             }).execute()
 
     try:
-        res = supabase.table(TABLE_ENTRY_CURRENT).select("*").execute()
+        start_utc, end_utc = jst_today_utc_bounds()
+        res = (
+            supabase.table(TABLE_ENTRY_CURRENT)
+            .select("*")
+            .gte("updated_at", start_utc)
+            .lt("updated_at", end_utc)
+            .execute()
+        )
         return res.data or []
     except Exception as e:
         print(f"Error fetching entry_current: {e}")
@@ -564,7 +581,16 @@ def get_entry_management():
 def get_entry_log():
     try:
         limit = min(int(request.args.get('limit', 50)), 200)
-        res = supabase.table(TABLE_ENTRY_LOG).select("*").order("event_time", desc=True).limit(limit).execute()
+        start_utc, end_utc = jst_today_utc_bounds()
+        res = (
+            supabase.table(TABLE_ENTRY_LOG)
+            .select("*")
+            .gte("event_time", start_utc)
+            .lt("event_time", end_utc)
+            .order("event_time", desc=True)
+            .limit(limit)
+            .execute()
+        )
         return jsonify(res.data or [])
     except Exception as e:
         return jsonify({'error': str(e)}), 500
