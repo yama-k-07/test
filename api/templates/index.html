@@ -9,6 +9,13 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@0.9.4/css/bulma.min.css">
   <link rel="stylesheet" href="{{url_for('static', filename='style.css')}}">
   <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+  <script>
+    window.SUPABASE_CONFIG = {
+      url: {{ supabase_url | tojson }},
+      anonKey: {{ supabase_anon_key | tojson }}
+    };
+  </script>
 </head>
 
 <body class="">

@@ -536,6 +536,7 @@ document.addEventListener('DOMContentLoaded', () => {
   loadAreaMapTable();
   loadUserTable();
   loadTunnelMap();
+  initWifiMapRealtime();
   loadApPositionsTable();
   loadEntryManagement();
 
@@ -555,6 +556,20 @@ window.addEventListener('resize', () => {
 
 
 // ======== トンネルマップ ========
+// latest_wifi_reports が更新されたら即座にマップを再取得する（Supabase Realtime）
+function initWifiMapRealtime() {
+  const cfg = window.SUPABASE_CONFIG;
+  if (!cfg || !cfg.url || !cfg.anonKey || !window.supabase) return;
+
+  const client = window.supabase.createClient(cfg.url, cfg.anonKey);
+  client
+    .channel('latest_wifi_reports-changes')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'latest_wifi_reports' }, () => {
+      loadTunnelMap();
+    })
+    .subscribe();
+}
+
 function loadTunnelMap() {
   fetch('/api/wifi_map')
     .then(r => r.json())

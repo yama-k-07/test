@@ -173,7 +173,11 @@ def login_page():
 @app.route("/index")
 @login_required
 def index():
-    return render_template("index.html")
+    return render_template(
+        "index.html",
+        supabase_url=url,
+        supabase_anon_key=os.environ.get("SUPABASE_ANON_KEY", ""),
+    )
 
 
 @app.route("/logout")
