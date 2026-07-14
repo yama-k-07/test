@@ -459,18 +459,10 @@ def test_deploy():
     return "DEPLOYED-V3-POST-OK"
 
 
-def load_entry_ap_config():
-    try:
-        response = supabase.table(TABLE_ENTRY_AP_CONFIG).select("mac").execute()
-        return {row["mac"] for row in (response.data or [])}
-    except Exception as e:
-        print(f"Error loading entry_ap_config: {e}")
-        return set()
-
-
 def do_entry_status_update():
-    """latest_wifi_reports を元に入退場を検出し entry_current / entry_log を更新する"""
-    entry_ap_macs = load_entry_ap_config()
+    """AP位置設定(ap_positions)に登録されたAPのいずれかと接続中は入場中、
+    そのどれとも接続できなくなったら退場とみなして entry_current / entry_log を更新する"""
+    ap_pos = load_ap_positions()
     reports = load_wifi_reports() or []
     user_map = {
         u['device_id']: u['username']
@@ -493,7 +485,7 @@ def do_entry_status_update():
             continue
         mac1 = row.get('mac01') or ''
         mac2 = row.get('mac02') or ''
-        at_entry = bool(entry_ap_macs) and (mac1 in entry_ap_macs or mac2 in entry_ap_macs)
+        at_entry = bool(ap_pos) and (mac1 in ap_pos or mac2 in ap_pos)
 
         prev = current_status.get(device_id, {})
         prev_status = prev.get('status', 'out')
