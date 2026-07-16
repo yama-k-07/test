@@ -8,6 +8,7 @@ let lastAreaMapSig = null;
 let lastUserListSig = null;
 let lastEntryStatusSig = null;
 let lastEntryLogSig = null;
+let lastDeviceInstructionSig = null;
 
 document.addEventListener('focusin', e => {
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') {
@@ -159,6 +160,122 @@ async function saveInstruction(areaId, instruction) {
   });
   isEditing = false;
 }
+
+// ======== デバイス指示 ========
+const DEVICE_INSTRUCTION_LABELS = [
+  { value: 'none', label: 'なし' },
+  { value: 'wait', label: '待て' },
+  { value: 'inward', label: '奥へ' },
+  { value: 'outward', label: '手前へ' },
+];
+
+function deviceInstructionOptions(current) {
+  return DEVICE_INSTRUCTION_LABELS.map(o =>
+    `<option value="${o.value}" ${o.value === current ? 'selected' : ''}>${o.label}</option>`
+  ).join('');
+}
+
+function createDeviceInstructionCard(worker, instruction) {
+  const col = document.createElement('div');
+  col.className = 'area-card';
+  col.dataset.deviceId = worker.device_id;
+
+  const label = worker.username || worker.device_id || '?';
+
+  col.innerHTML = `
+    <div class="box areacard">
+      <h2>${label}</h2><br>
+      <div class="field">
+        <label class="label">指示</label>
+        <div class="control">
+          <select class="select device-instruction">
+            ${deviceInstructionOptions(instruction)}
+          </select>
+        </div>
+      </div>
+    </div>
+  `;
+
+  const select = col.querySelector('.device-instruction');
+  select.addEventListener('change', () => {
+    isEditing = true;
+    saveDeviceInstruction(worker.device_id, select.value);
+  });
+
+  return col;
+}
+
+async function saveDeviceInstruction(deviceId, instruction) {
+  try {
+    const res = await fetch('/api/device_instructions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ device_id: deviceId, instruction })
+    });
+    if (!res.ok) {
+      const b = await res.json().catch(() => ({}));
+      alert('指示の送信に失敗しました: ' + (b.error || res.status));
+    }
+  } catch (e) {
+    console.error('saveDeviceInstruction error:', e);
+    alert('指示の送信に失敗しました');
+  } finally {
+    isEditing = false;
+  }
+}
+
+async function loadDeviceInstructionBoard() {
+  if (isEditing) return;
+
+  const board = document.getElementById('deviceInstructionBoard');
+  if (!board) return;
+
+  let workers, instructions;
+  try {
+    const [wifiRes, instrRes] = await Promise.all([
+      fetch('/api/wifi_map'),
+      fetch('/api/device_instructions')
+    ]);
+    if (!wifiRes.ok || !instrRes.ok) {
+      console.error('loadDeviceInstructionBoard: APIエラー', wifiRes.status, instrRes.status);
+      return;
+    }
+    const wifiData = await wifiRes.json();
+    workers = wifiData.workers;
+    instructions = await instrRes.json();
+  } catch (e) {
+    console.error('loadDeviceInstructionBoard fetch error:', e);
+    return;
+  }
+
+  if (!Array.isArray(workers) || !Array.isArray(instructions)) {
+    console.error('loadDeviceInstructionBoard: 想定外のレスポンス形式', { workers, instructions });
+    return;
+  }
+
+  const sig = JSON.stringify({ workers, instructions });
+  if (sig === lastDeviceInstructionSig) return;
+  lastDeviceInstructionSig = sig;
+
+  const instrMap = {};
+  instructions.forEach(i => { instrMap[i.device_id] = i.instruction; });
+
+  board.innerHTML = '';
+
+  if (workers.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'worker-empty';
+    empty.textContent = '接続中のデバイスがありません';
+    board.appendChild(empty);
+    return;
+  }
+
+  workers.forEach(w => {
+    const card = createDeviceInstructionCard(w, instrMap[w.device_id] || 'none');
+    board.appendChild(card);
+  });
+}
+
 
 // ===== 並び替え =====
 function enableSortable() {
@@ -605,6 +722,7 @@ document.addEventListener('DOMContentLoaded', () => {
   loadApPositionsTable();
   loadApPresetList();
   loadEntryManagement();
+  loadDeviceInstructionBoard();
 
   setInterval(() => {
     if (isEditing) return;
@@ -613,6 +731,7 @@ document.addEventListener('DOMContentLoaded', () => {
     loadUserTable();
     loadEntryManagement();
     loadTunnelMap();
+    loadDeviceInstructionBoard();
   }, 5000);
 });
 

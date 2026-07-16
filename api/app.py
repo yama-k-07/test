@@ -27,6 +27,8 @@ TABLE_WIFI_LOG = "wifi_reports"
 TABLE_WIFI_REPORTS = "latest_wifi_reports"
 TABLE_AP_POSITIONS = "ap_positions"
 TABLE_AP_PRESETS = "ap_position_presets"
+TABLE_DEVICE_INSTRUCTIONS = "device_instructions"
+DEVICE_INSTRUCTIONS = {"none", "wait", "inward", "outward"}
 TABLE_ENTRY_CURRENT = "entry_current"
 TABLE_ENTRY_LOG = "entry_log"
 
@@ -93,6 +95,15 @@ def jst_today_utc_bounds():
     start_jst = datetime.now(JST).replace(hour=0, minute=0, second=0, microsecond=0)
     end_jst = start_jst + timedelta(days=1)
     return start_jst.astimezone(timezone.utc).isoformat(), end_jst.astimezone(timezone.utc).isoformat()
+
+
+def load_device_instructions():
+    try:
+        response = supabase.table(TABLE_DEVICE_INSTRUCTIONS).select("*").execute()
+        return response.data or []
+    except Exception as e:
+        print(f"Error loading device_instructions: {e}")
+        return []
 
 
 def load_ap_presets():
@@ -434,6 +445,32 @@ def get_wifi_map():
         'ap_labels': AP_LABELS,
         'area_order': area_order,
     })
+
+
+@app.route('/api/device_instructions', methods=['GET', 'POST'])
+@login_required
+def handle_device_instructions():
+    if request.method == 'GET':
+        return jsonify(load_device_instructions())
+
+    data = request.json or {}
+    device_id = data.get('device_id')
+    instruction = data.get('instruction')
+
+    if not device_id:
+        return jsonify({'error': 'device_id を指定してください'}), 400
+    if instruction not in DEVICE_INSTRUCTIONS:
+        return jsonify({'error': f'instruction は {sorted(DEVICE_INSTRUCTIONS)} のいずれかである必要があります'}), 400
+
+    try:
+        supabase.table(TABLE_DEVICE_INSTRUCTIONS).upsert({
+            'device_id': device_id,
+            'instruction': instruction,
+            'updated_at': now_iso(),
+        }).execute()
+        return jsonify({'message': 'device instruction saved'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 
 @app.route("/api/area_order", methods=["GET", "POST"])
