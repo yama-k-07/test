@@ -175,16 +175,19 @@ function deviceInstructionOptions(current) {
   ).join('');
 }
 
-function createDeviceInstructionCard(worker, instruction) {
+function createDeviceInstructionCard(user, instruction, online) {
   const col = document.createElement('div');
   col.className = 'area-card';
-  col.dataset.deviceId = worker.device_id;
+  col.dataset.deviceId = user.device_id;
 
-  const label = worker.username || worker.device_id || '?';
+  const label = user.username || user.device_id || '?';
 
   col.innerHTML = `
     <div class="box areacard">
-      <h2>${label}</h2><br>
+      <h2>${label}</h2>
+      <div style="text-align:center; margin: 6px 0 10px;">
+        <span class="entry-badge ${online ? 'entry-in' : 'entry-out'}">${online ? 'オンライン' : 'オフライン'}</span>
+      </div>
       <div class="field">
         <label class="label">指示</label>
         <div class="control">
@@ -199,7 +202,7 @@ function createDeviceInstructionCard(worker, instruction) {
   const select = col.querySelector('.device-instruction');
   select.addEventListener('change', () => {
     isEditing = true;
-    saveDeviceInstruction(worker.device_id, select.value);
+    saveDeviceInstruction(user.device_id, select.value);
   });
 
   return col;
@@ -230,48 +233,52 @@ async function loadDeviceInstructionBoard() {
   const board = document.getElementById('deviceInstructionBoard');
   if (!board) return;
 
-  let workers, instructions;
+  let users, onlineIds, instructions;
   try {
-    const [wifiRes, instrRes] = await Promise.all([
+    const [usersRes, wifiRes, instrRes] = await Promise.all([
+      fetch('/api/user'),
       fetch('/api/wifi_map'),
       fetch('/api/device_instructions')
     ]);
-    if (!wifiRes.ok || !instrRes.ok) {
-      console.error('loadDeviceInstructionBoard: APIエラー', wifiRes.status, instrRes.status);
+    if (!usersRes.ok || !wifiRes.ok || !instrRes.ok) {
+      console.error('loadDeviceInstructionBoard: APIエラー', usersRes.status, wifiRes.status, instrRes.status);
       return;
     }
+    users = await usersRes.json();
     const wifiData = await wifiRes.json();
-    workers = wifiData.workers;
+    onlineIds = wifiData.online_device_ids;
     instructions = await instrRes.json();
   } catch (e) {
     console.error('loadDeviceInstructionBoard fetch error:', e);
     return;
   }
 
-  if (!Array.isArray(workers) || !Array.isArray(instructions)) {
-    console.error('loadDeviceInstructionBoard: 想定外のレスポンス形式', { workers, instructions });
+  if (!Array.isArray(users) || !Array.isArray(onlineIds) || !Array.isArray(instructions)) {
+    console.error('loadDeviceInstructionBoard: 想定外のレスポンス形式', { users, onlineIds, instructions });
     return;
   }
 
-  const sig = JSON.stringify({ workers, instructions });
+  const sig = JSON.stringify({ users, onlineIds, instructions });
   if (sig === lastDeviceInstructionSig) return;
   lastDeviceInstructionSig = sig;
 
+  const onlineSet = new Set(onlineIds);
   const instrMap = {};
   instructions.forEach(i => { instrMap[i.device_id] = i.instruction; });
 
   board.innerHTML = '';
 
-  if (workers.length === 0) {
+  const devices = users.filter(u => u.device_id);
+  if (devices.length === 0) {
     const empty = document.createElement('div');
     empty.className = 'worker-empty';
-    empty.textContent = '接続中のデバイスがありません';
+    empty.textContent = '登録済みのデバイスがありません';
     board.appendChild(empty);
     return;
   }
 
-  workers.forEach(w => {
-    const card = createDeviceInstructionCard(w, instrMap[w.device_id] || 'none');
+  devices.forEach(u => {
+    const card = createDeviceInstructionCard(u, instrMap[u.device_id] || 'none', onlineSet.has(u.device_id));
     board.appendChild(card);
   });
 }

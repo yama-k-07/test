@@ -439,11 +439,14 @@ def get_wifi_map():
             'area_id': area_id,
         })
 
+    online_device_ids = sorted({row.get('device_id') for row in (reports or []) if row.get('device_id')})
+
     return jsonify({
         'workers': workers,
         'ap_count': AP_COUNT,
         'ap_labels': AP_LABELS,
         'area_order': area_order,
+        'online_device_ids': online_device_ids,
     })
 
 
