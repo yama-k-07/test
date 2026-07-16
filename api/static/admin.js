@@ -22,11 +22,27 @@ document.addEventListener('focusout', () => {
 async function loadAreaBoard() {
   if (isEditing) return;
 
-  const [areas, entries, order] = await Promise.all([
-    fetch('/api/area_status').then(r => r.json()),
-    fetch('/api/entry_status').then(r => r.json()),
-    fetch('/api/area_order').then(r => r.json())
-  ]);
+  let areas, entries, order;
+  try {
+    const [areasRes, entriesRes, orderRes] = await Promise.all([
+      fetch('/api/area_status'),
+      fetch('/api/entry_status'),
+      fetch('/api/area_order')
+    ]);
+    if (!areasRes.ok || !entriesRes.ok || !orderRes.ok) {
+      console.error('loadAreaBoard: APIエラー', areasRes.status, entriesRes.status, orderRes.status);
+      return;
+    }
+    [areas, entries, order] = await Promise.all([areasRes.json(), entriesRes.json(), orderRes.json()]);
+  } catch (e) {
+    console.error('loadAreaBoard fetch error:', e);
+    return;
+  }
+
+  if (!Array.isArray(areas) || !Array.isArray(entries) || !Array.isArray(order)) {
+    console.error('loadAreaBoard: 想定外のレスポンス形式', { areas, entries, order });
+    return;
+  }
 
   const sig = JSON.stringify({ areas, entries, order });
   if (sig === lastAreaBoardSig) return;
@@ -203,8 +219,22 @@ async function loadUserTable() {
   }).filter(r => (r.username || r.device_id));
   // }).filter(r => (r.area_id || r.username || r.device_id));
 
-  const res = await fetch('/api/user');
-  const userList = await res.json();
+  let userList;
+  try {
+    const res = await fetch('/api/user');
+    if (!res.ok) {
+      console.error('loadUserTable: APIエラー', res.status);
+      return;
+    }
+    userList = await res.json();
+  } catch (e) {
+    console.error('loadUserTable fetch error:', e);
+    return;
+  }
+  if (!Array.isArray(userList)) {
+    console.error('loadUserTable: 想定外のレスポンス形式', userList);
+    return;
+  }
 
   const sig = JSON.stringify(userList);
   if (sig === lastUserListSig && unsaved.length === 0) return;
@@ -442,8 +472,22 @@ async function loadAreaMapTable() {
   const body = document.getElementById('areaTableBody');
   if (!body || isEditing) return;
 
-  const res = await fetch('/api/area');
-  const list = await res.json();
+  let list;
+  try {
+    const res = await fetch('/api/area');
+    if (!res.ok) {
+      console.error('loadAreaMapTable: APIエラー', res.status);
+      return;
+    }
+    list = await res.json();
+  } catch (e) {
+    console.error('loadAreaMapTable fetch error:', e);
+    return;
+  }
+  if (!Array.isArray(list)) {
+    console.error('loadAreaMapTable: 想定外のレスポンス形式', list);
+    return;
+  }
 
   const sig = JSON.stringify(list);
   if (sig === lastAreaMapSig) return;
