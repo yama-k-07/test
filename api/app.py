@@ -2,6 +2,7 @@ from flask import Flask, request, jsonify, render_template, redirect, url_for, s
 from supabase import create_client, Client
 from functools import wraps
 from datetime import datetime, timezone
+from collections import defaultdict
 import threading
 import json
 import os
@@ -13,7 +14,12 @@ app.secret_key = 'mamotchi_secret_key_pixel'
 #supabase API Key
 url = os.environ.get("SUPABASE_URL")
 key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
-supabase: Client = create_client(url, key)
+supabase: Client | None = None
+if url and key:
+    try:
+        supabase = create_client(url, key)
+    except Exception as e:
+        print(f"Failed to initialize Supabase client: {e}")
 
 # TABLE_AP_AREA = "ap_areas"
 # TABLE_AREA_STATUS = "area_status"
@@ -26,6 +32,9 @@ TABLE_AP_POSITIONS = "ap_positions"
 TABLE_ENTRY_AP_CONFIG = "entry_ap_config"
 TABLE_ENTRY_CURRENT = "entry_current"
 TABLE_ENTRY_LOG = "entry_log"
+TABLE_WATCH_SCANS = "watch_scans"
+TABLE_WIFI_FINGERPRINTS = "wifi_fingerprints"
+TABLE_USER_LOCATIONS = "user_locations"
 
 entry_status_table = []
 last_seen_dict = {}
@@ -34,8 +43,130 @@ last_seen_dict = {}
 #  Supabase 連携データ処理関数
 # ==========================================
 
+
+def load_watch_scans(user_id=None):
+    if not supabase:
+        return []
+    try:
+        query = supabase.table(TABLE_WATCH_SCANS).select("*")
+        if user_id:
+            query = query.eq("user_id", user_id)
+        response = query.order("created_at", desc=True).execute()
+        return getattr(response, "data", []) or []
+    except Exception as e:
+        print(f"Error loading watch_scans: {e}")
+        return []
+
+
+def load_wifi_fingerprints():
+    if not supabase:
+        return []
+    try:
+        response = supabase.table(TABLE_WIFI_FINGERPRINTS).select("*").execute()
+        return getattr(response, "data", []) or []
+    except Exception as e:
+        print(f"Error loading wifi_fingerprints: {e}")
+        return []
+
+
+def parse_rssi(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def estimate_location_from_fingerprints(scans, fingerprints, k=3, missing_penalty=100):
+    """KNN風の簡易フィンガープリント位置推定。"""
+    if not scans or not fingerprints:
+        return None, {}
+
+    scan_rows = [row for row in scans if row.get("bssid") and parse_rssi(row.get("rssi")) is not None]
+    if not scan_rows:
+        return None, {}
+
+    fingerprints_by_location = defaultdict(list)
+    for row in fingerprints:
+        location_name = row.get("location_name")
+        if location_name:
+            fingerprints_by_location[location_name].append(row)
+
+    if not fingerprints_by_location:
+        return None, {}
+
+    scores = {}
+    for location_name, rows in fingerprints_by_location.items():
+        total_distance = 0.0
+        matched_count = 0
+        known_bssids = {row.get("bssid") for row in scan_rows}
+
+        for scan in scan_rows:
+            scan_bssid = scan.get("bssid")
+            scan_rssi = parse_rssi(scan.get("rssi"))
+            candidates = [fp for fp in rows if fp.get("bssid") == scan_bssid]
+            if not candidates:
+                total_distance += missing_penalty
+                matched_count += 1
+                continue
+
+            distances = []
+            for fp in candidates:
+                fp_rssi = parse_rssi(fp.get("rssi"))
+                if fp_rssi is None:
+                    continue
+                distances.append(abs(scan_rssi - fp_rssi))
+
+            if not distances:
+                total_distance += missing_penalty
+                matched_count += 1
+                continue
+
+            total_distance += sum(sorted(distances)[: min(k, len(distances))]) / min(k, len(distances))
+            matched_count += 1
+
+        for fp in rows:
+            if fp.get("bssid") not in known_bssids:
+                total_distance += missing_penalty / 2
+
+        scores[location_name] = total_distance / max(1, matched_count + len(rows))
+
+    best_location = min(scores.items(), key=lambda item: item[1])[0]
+    return best_location, scores
+
+
+def upsert_user_location(user_id, current_location, updated_at=None):
+    if not supabase:
+        return None
+    payload = {
+        "user_id": user_id,
+        "current_location": current_location,
+        "updated_at": updated_at or now_iso(),
+    }
+    try:
+        response = supabase.table(TABLE_USER_LOCATIONS).upsert(payload, on_conflict="user_id").execute()
+        return getattr(response, "data", []) or []
+    except Exception as e:
+        print(f"Error upserting user location: {e}")
+        return []
+
+
+def estimate_user_location(user_id):
+    if not user_id:
+        return None, {}
+
+    scans = load_watch_scans(user_id)
+    fingerprints = load_wifi_fingerprints()
+    location_name, scores = estimate_location_from_fingerprints(scans, fingerprints)
+    if not location_name:
+        return None, scores
+
+    upsert_user_location(user_id, location_name)
+    return location_name, scores
+
 def load_wifi_reports():
     """wifi_reports から device_id ごとの最新レコードを返す（同一APに複数デバイスがいても全員返す）"""
+    if not supabase:
+        return []
     try:
         response = supabase.table(TABLE_WIFI_LOG).select("*").order("id", desc=True).execute()
         seen = set()
@@ -52,6 +183,8 @@ def load_wifi_reports():
 
 
 def load_ap_positions():
+    if not supabase:
+        return {}
     try:
         response = supabase.table(TABLE_AP_POSITIONS).select("*").execute()
         return {row["mac"]: row["position"] for row in response.data}
@@ -61,6 +194,8 @@ def load_ap_positions():
 
 
 def load_user_table():
+    if not supabase:
+        return []
     try:
         response = supabase.table(TABLE_USER).select("*").execute()
         return response.data
@@ -70,6 +205,8 @@ def load_user_table():
 
 
 def load_area_table():
+    if not supabase:
+        return []
     try:
         response = supabase.table(TABLE_AREA_STATUS).select("bssid, area_id").execute()
         return response.data
@@ -83,6 +220,8 @@ def now_iso():
 
 
 def load_area_order():
+    if not supabase:
+        return []
     try:
         response = supabase.table(TABLE_AREA_STATUS).select("area_id").order("area_order", desc=False).execute()
         if response.data:
@@ -161,7 +300,11 @@ def login_page():
 @app.route("/index")
 @login_required
 def index():
-    return render_template("index.html")
+    return render_template(
+        "index.html",
+        supabase_url=os.environ.get("SUPABASE_URL", ""),
+        supabase_anon_key=os.environ.get("SUPABASE_ANON_KEY", ""),
+    )
 
 
 @app.route("/logout")
@@ -437,6 +580,36 @@ def Location_estimation():
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/location_estimate', methods=['GET', 'POST'])
+def handle_location_estimate():
+    data = request.get_json(silent=True) or {}
+    user_id = (request.args.get('user_id') or data.get('user_id') or '').strip()
+    if not user_id:
+        return jsonify({'error': 'user_id が必要です'}), 400
+
+    try:
+        location, scores = estimate_user_location(user_id)
+        return jsonify({
+            'user_id': user_id,
+            'current_location': location,
+            'scores': scores,
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/user_locations', methods=['GET'])
+def handle_user_locations():
+    if not supabase:
+        return jsonify([])
+
+    try:
+        response = supabase.table(TABLE_USER_LOCATIONS).select('*').order('updated_at', desc=True).execute()
+        return jsonify(getattr(response, 'data', []) or [])
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 
 @app.route("/test-deploy")

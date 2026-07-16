@@ -9,6 +9,7 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@0.9.4/css/bulma.min.css">
   <link rel="stylesheet" href="{{url_for('static', filename='style.css')}}">
   <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
 
 <body class="">
@@ -34,6 +35,30 @@
     <section class="box">
       <h2 class="subtitle">トンネルマップ</h2>
       <canvas id="tunnelMap"></canvas>
+    </section>
+
+    <section class="box">
+      <h2 class="subtitle">現在地リアルタイム表示</h2>
+      <div class="field has-addons">
+        <div class="control">
+          <input id="locationUserId" class="input" placeholder="user_id">
+        </div>
+        <div class="control">
+          <button class="button is-info" onclick="estimateAndRefreshLocation()">位置推定</button>
+        </div>
+      </div>
+      <div class="table-container">
+        <table class="table is-fullwidth">
+          <thead>
+            <tr>
+              <th>ユーザー</th>
+              <th>現在地</th>
+              <th>更新日時</th>
+            </tr>
+          </thead>
+          <tbody id="locationTableBody"></tbody>
+        </table>
+      </div>
     </section>
 
     <section class="box">
@@ -168,6 +193,10 @@
     </footer>
   </main>
 
+  <script>
+    window.SUPABASE_URL = "{{ supabase_url }}";
+    window.SUPABASE_ANON_KEY = "{{ supabase_anon_key }}";
+  </script>
   <script src="{{ url_for('static', filename='admin.js') }}"></script>
 </body>
 

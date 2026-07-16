@@ -1,6 +1,8 @@
 let isEditing = false;
 let isSorting = false;
 let lastWifiMapData = null;
+let locationRealtimeClient = null;
+let locationChannel = null;
 
 document.addEventListener('focusin', e => {
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') {
@@ -539,6 +541,7 @@ document.addEventListener('DOMContentLoaded', () => {
   loadApPositionsTable();
   loadEntryManagement();
   loadEntryApConfig();
+  initLocationRealtime();
 
   setInterval(() => {
     if (isEditing) return;
@@ -547,6 +550,7 @@ document.addEventListener('DOMContentLoaded', () => {
     loadUserTable();
     loadEntryManagement();
     loadTunnelMap();
+    loadUserLocations();
   }, 5000);
 });
 
@@ -709,6 +713,101 @@ function renderTunnelMap(data) {
   }
 }
 
+
+// ======== 現在地リアルタイム ========
+async function initLocationRealtime() {
+  if (!window.SUPABASE_URL || !window.SUPABASE_ANON_KEY) {
+    console.warn('Supabase env variables are not configured; falling back to polling.');
+    await loadUserLocations();
+    return;
+  }
+
+  if (!window.supabase || typeof window.supabase.createClient !== 'function') {
+    console.warn('Supabase JS SDK is not available; falling back to polling.');
+    await loadUserLocations();
+    return;
+  }
+
+  try {
+    locationRealtimeClient = window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY, {
+      auth: { persistSession: false }
+    });
+
+    await loadUserLocations();
+
+    if (locationChannel) {
+      locationRealtimeClient.removeChannel(locationChannel);
+    }
+
+    locationChannel = locationRealtimeClient.channel('user_locations_changes');
+    locationChannel.on('postgres_changes', {
+      event: '*',
+      schema: 'public',
+      table: 'user_locations'
+    }, () => {
+      loadUserLocations();
+    }).subscribe();
+  } catch (e) {
+    console.error('initLocationRealtime error:', e);
+    await loadUserLocations();
+  }
+}
+
+async function loadUserLocations() {
+  const body = document.getElementById('locationTableBody');
+  if (!body) return;
+
+  try {
+    const res = await fetch('/api/user_locations');
+    const list = await res.json();
+    renderUserLocations(Array.isArray(list) ? list : []);
+  } catch (e) {
+    console.error('loadUserLocations error:', e);
+  }
+}
+
+function renderUserLocations(list) {
+  const body = document.getElementById('locationTableBody');
+  if (!body) return;
+
+  body.innerHTML = '';
+  if (!list.length) {
+    body.innerHTML = '<tr><td colspan="3" style="text-align:center;color:grey;">まだ位置データがありません</td></tr>';
+    return;
+  }
+
+  list.forEach(item => {
+    const row = document.createElement('tr');
+    row.innerHTML = `
+      <td>${item.user_id || '-'}</td>
+      <td>${item.current_location || '-'}</td>
+      <td>${item.updated_at ? formatEntryTime(item.updated_at) : '-'}</td>
+    `;
+    body.appendChild(row);
+  });
+}
+
+async function estimateAndRefreshLocation() {
+  const input = document.getElementById('locationUserId');
+  const userId = input ? input.value.trim() : '';
+  if (!userId) {
+    alert('user_id を入力してください');
+    return;
+  }
+
+  try {
+    const res = await fetch(`/api/location_estimate?user_id=${encodeURIComponent(userId)}`);
+    const data = await res.json();
+    if (!res.ok) {
+      alert(data.error || '位置推定に失敗しました');
+      return;
+    }
+    await loadUserLocations();
+    alert(`推定結果: ${data.current_location || '未判定'}`);
+  } catch (e) {
+    console.error('estimateAndRefreshLocation error:', e);
+  }
+}
 
 // ======== AP位置設定 ========
 async function loadApPositionsTable() {
