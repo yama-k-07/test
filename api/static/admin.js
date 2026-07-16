@@ -2,6 +2,13 @@ let isEditing = false;
 let isSorting = false;
 let lastWifiMapData = null;
 
+// ちらつき防止用: 前回取得データとの差分がない場合は再描画をスキップする
+let lastAreaBoardSig = null;
+let lastAreaMapSig = null;
+let lastUserListSig = null;
+let lastEntryStatusSig = null;
+let lastEntryLogSig = null;
+
 document.addEventListener('focusin', e => {
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') {
     isEditing = true;
@@ -20,6 +27,10 @@ async function loadAreaBoard() {
     fetch('/api/entry_status').then(r => r.json()),
     fetch('/api/area_order').then(r => r.json())
   ]);
+
+  const sig = JSON.stringify({ areas, entries, order });
+  if (sig === lastAreaBoardSig) return;
+  lastAreaBoardSig = sig;
 
   const board = document.getElementById("areaBoard");
   board.innerHTML = "";
@@ -176,7 +187,7 @@ async function saveAreaOrder() {
 // ======== USER管理 ========
 async function loadUserTable() {
   const body = document.getElementById('userTableBody');
-  if (!body) return;
+  if (!body || isEditing) return;
 
   // 現在の行（編集中含む）を取得（既存の元キー情報も読む）
   const existingRows = Array.from(body.querySelectorAll('tr'));
@@ -194,6 +205,11 @@ async function loadUserTable() {
 
   const res = await fetch('/api/user');
   const userList = await res.json();
+
+  const sig = JSON.stringify(userList);
+  if (sig === lastUserListSig && unsaved.length === 0) return;
+  lastUserListSig = sig;
+
   body.innerHTML = '';
 
   // unsaved を消費しつつサーバーの行を表示（unsaved があれば上書きして表示）
@@ -428,6 +444,11 @@ async function loadAreaMapTable() {
 
   const res = await fetch('/api/area');
   const list = await res.json();
+
+  const sig = JSON.stringify(list);
+  if (sig === lastAreaMapSig) return;
+  lastAreaMapSig = sig;
+
   body.innerHTML = '';
 
   list.forEach(item => {
@@ -865,11 +886,19 @@ async function loadEntryManagement() {
     ]);
     if (mgmtRes.ok) {
       const data = await mgmtRes.json();
-      renderEntryCurrentTable(data.status || []);
+      const sig = JSON.stringify(data.status || []);
+      if (sig !== lastEntryStatusSig) {
+        lastEntryStatusSig = sig;
+        renderEntryCurrentTable(data.status || []);
+      }
     }
     if (logRes.ok) {
       const logData = await logRes.json();
-      renderEntryLogTable(logData);
+      const sig = JSON.stringify(logData);
+      if (sig !== lastEntryLogSig) {
+        lastEntryLogSig = sig;
+        renderEntryLogTable(logData);
+      }
     }
   } catch (e) {
     console.error('loadEntryManagement error:', e);
