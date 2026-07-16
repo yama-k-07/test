@@ -3,6 +3,8 @@ let isSorting = false;
 let lastWifiMapData = null;
 let locationRealtimeClient = null;
 let locationChannel = null;
+let locationMap = null;
+let locationMarkersLayer = null;
 
 document.addEventListener('focusin', e => {
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') {
@@ -541,6 +543,7 @@ document.addEventListener('DOMContentLoaded', () => {
   loadApPositionsTable();
   loadEntryManagement();
   loadEntryApConfig();
+  initLocationMap();
   initLocationRealtime();
 
   setInterval(() => {
@@ -753,6 +756,19 @@ async function initLocationRealtime() {
   }
 }
 
+function initLocationMap() {
+  const mapEl = document.getElementById('locationMap');
+  if (!mapEl || typeof window.L === 'undefined') return;
+
+  locationMap = window.L.map('locationMap').setView([35.6812, 139.7671], 12);
+  window.L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19,
+    attribution: '&copy; OpenStreetMap contributors'
+  }).addTo(locationMap);
+
+  locationMarkersLayer = window.L.layerGroup().addTo(locationMap);
+}
+
 async function loadUserLocations() {
   const body = document.getElementById('locationTableBody');
   if (!body) return;
@@ -760,7 +776,9 @@ async function loadUserLocations() {
   try {
     const res = await fetch('/api/user_locations');
     const list = await res.json();
-    renderUserLocations(Array.isArray(list) ? list : []);
+    const locations = Array.isArray(list) ? list : [];
+    renderUserLocations(locations);
+    renderLocationMap(locations);
   } catch (e) {
     console.error('loadUserLocations error:', e);
   }
@@ -785,6 +803,31 @@ function renderUserLocations(list) {
     `;
     body.appendChild(row);
   });
+}
+
+function renderLocationMap(list) {
+  if (!locationMap || !locationMarkersLayer) return;
+
+  locationMarkersLayer.clearLayers();
+  const points = [];
+
+  list.forEach(item => {
+    const lat = Number(item.lat);
+    const lng = Number(item.lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+
+    const marker = window.L.marker([lat, lng]).bindPopup(`
+      <strong>${item.user_id || '-'}</strong><br>
+      ${item.current_location || '-'}
+    `);
+    marker.addTo(locationMarkersLayer);
+    points.push([lat, lng]);
+  });
+
+  if (points.length > 0) {
+    const bounds = window.L.latLngBounds(points);
+    locationMap.fitBounds(bounds.pad(0.2));
+  }
 }
 
 async function estimateAndRefreshLocation() {
