@@ -87,6 +87,22 @@ def now_iso():
     return datetime.now(timezone.utc).isoformat()
 
 
+ONLINE_THRESHOLD_SEC = 60
+
+
+def is_recent(iso_str, threshold_sec=ONLINE_THRESHOLD_SEC):
+    """指定したISO日時文字列が現在時刻からthreshold_sec以内かどうか"""
+    if not iso_str:
+        return False
+    try:
+        ts = datetime.fromisoformat(iso_str.replace('Z', '+00:00'))
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        return (datetime.now(timezone.utc) - ts).total_seconds() <= threshold_sec
+    except (ValueError, TypeError):
+        return False
+
+
 JST = timezone(timedelta(hours=9))
 
 
@@ -439,7 +455,10 @@ def get_wifi_map():
             'area_id': area_id,
         })
 
-    online_device_ids = sorted({row.get('device_id') for row in (reports or []) if row.get('device_id')})
+    online_device_ids = sorted({
+        row.get('device_id') for row in (reports or [])
+        if row.get('device_id') and is_recent(row.get('created_at'))
+    })
 
     return jsonify({
         'workers': workers,
