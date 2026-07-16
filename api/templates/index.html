@@ -85,6 +85,31 @@
       <section class="box column-box">
         <h2 class="subtitle">AP位置設定</h2>
         <p style="font-size:12px; margin-bottom:8px;">APのMACアドレスとトンネル内の位置番号（0=入口1m 〜 5=奥11m）を対応付けてください。</p>
+
+        <div class="field has-addons">
+          <div class="control is-expanded">
+            <div class="select is-fullwidth">
+              <select id="apPresetSelect">
+                <option value="">-- プリセットを選択 --</option>
+              </select>
+            </div>
+          </div>
+          <div class="control">
+            <button class="button" onclick="loadApPreset()">読み込み</button>
+          </div>
+          <div class="control">
+            <button class="button is-danger" onclick="deleteApPreset()">削除</button>
+          </div>
+        </div>
+        <div class="field has-addons">
+          <div class="control is-expanded">
+            <input class="input" id="apPresetNameInput" type="text" placeholder="プリセット名">
+          </div>
+          <div class="control">
+            <button class="button is-link" onclick="saveApPreset()">プリセットとして保存</button>
+          </div>
+        </div>
+
         <div class="table-container">
           <table class="table is-fullwidth">
             <thead>

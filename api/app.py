@@ -26,6 +26,7 @@ TABLE_USER = "user"
 TABLE_WIFI_LOG = "wifi_reports"
 TABLE_WIFI_REPORTS = "latest_wifi_reports"
 TABLE_AP_POSITIONS = "ap_positions"
+TABLE_AP_PRESETS = "ap_position_presets"
 TABLE_ENTRY_CURRENT = "entry_current"
 TABLE_ENTRY_LOG = "entry_log"
 
@@ -92,6 +93,15 @@ def jst_today_utc_bounds():
     start_jst = datetime.now(JST).replace(hour=0, minute=0, second=0, microsecond=0)
     end_jst = start_jst + timedelta(days=1)
     return start_jst.astimezone(timezone.utc).isoformat(), end_jst.astimezone(timezone.utc).isoformat()
+
+
+def load_ap_presets():
+    try:
+        response = supabase.table(TABLE_AP_PRESETS).select("*").order("name").execute()
+        return response.data or []
+    except Exception as e:
+        print(f"Error loading ap_position_presets: {e}")
+        return []
 
 
 def load_area_order():
@@ -335,6 +345,42 @@ def handle_ap_positions():
             return jsonify({'error': 'mac を指定してください'}), 400
         try:
             supabase.table(TABLE_AP_POSITIONS).delete().eq('mac', mac).execute()
+            return jsonify({'message': 'deleted'})
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/ap_presets', methods=['GET', 'POST', 'DELETE'])
+@login_required
+def handle_ap_presets():
+    if request.method == 'GET':
+        return jsonify(load_ap_presets())
+
+    data = request.json or {}
+    name = (data.get('name') or '').strip()
+    if not name:
+        return jsonify({'error': 'プリセット名を指定してください'}), 400
+
+    if request.method == 'POST':
+        positions = data.get('positions')
+        if not isinstance(positions, list) or not positions:
+            return jsonify({'error': 'positions（AP設定の配列）が必要です'}), 400
+        for item in positions:
+            if 'mac' not in item or 'position' not in item:
+                return jsonify({'error': '各要素に mac と position が必要です'}), 400
+        try:
+            supabase.table(TABLE_AP_PRESETS).upsert({
+                'name': name,
+                'positions': positions,
+                'updated_at': now_iso(),
+            }).execute()
+            return jsonify({'message': 'AP preset saved'})
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    else:
+        try:
+            supabase.table(TABLE_AP_PRESETS).delete().eq('name', name).execute()
             return jsonify({'message': 'deleted'})
         except Exception as e:
             return jsonify({'error': str(e)}), 500

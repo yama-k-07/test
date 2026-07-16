@@ -603,6 +603,7 @@ document.addEventListener('DOMContentLoaded', () => {
   loadTunnelMap();
   initWifiMapRealtime();
   loadApPositionsTable();
+  loadApPresetList();
   loadEntryManagement();
 
   setInterval(() => {
@@ -918,6 +919,146 @@ function removeApPositionRow(button) {
     if (res.ok) row.remove();
     else alert('削除失敗');
   });
+}
+
+
+// ======== AP設定プリセット ========
+async function loadApPresetList() {
+  const select = document.getElementById('apPresetSelect');
+  if (!select) return;
+
+  try {
+    const res = await fetch('/api/ap_presets');
+    if (!res.ok) {
+      console.error('loadApPresetList: APIエラー', res.status);
+      return;
+    }
+    const presets = await res.json();
+    if (!Array.isArray(presets)) return;
+
+    const current = select.value;
+    select.innerHTML = '<option value="">-- プリセットを選択 --</option>' +
+      presets.map(p => `<option value="${p.name}">${p.name}</option>`).join('');
+    if (presets.some(p => p.name === current)) select.value = current;
+  } catch (e) {
+    console.error('loadApPresetList error:', e);
+  }
+}
+
+async function loadApPreset() {
+  const select = document.getElementById('apPresetSelect');
+  const name = select ? select.value : '';
+  if (!name) {
+    alert('読み込むプリセットを選択してください');
+    return;
+  }
+
+  try {
+    const res = await fetch('/api/ap_presets');
+    if (!res.ok) {
+      alert('プリセットの取得に失敗しました');
+      return;
+    }
+    const presets = await res.json();
+    const preset = (presets || []).find(p => p.name === name);
+    if (!preset) {
+      alert('プリセットが見つかりません');
+      return;
+    }
+
+    const body = document.getElementById('apPositionsTableBody');
+    body.innerHTML = '';
+    (preset.positions || []).forEach(item => {
+      const row = document.createElement('tr');
+      row.dataset.originalMac = item.mac || '';
+      row.innerHTML = `
+        <td><input class="input" type="text" value="${item.mac}"></td>
+        <td><select class="select ap-position-select">${apPositionOptions(item.position)}</select></td>
+        <td><button class="button is-danger" onclick="removeApPositionRow(this)">削除</button></td>
+      `;
+      body.appendChild(row);
+    });
+
+    const nameInput = document.getElementById('apPresetNameInput');
+    if (nameInput) nameInput.value = name;
+
+    alert(`プリセット「${name}」を読み込みました。内容を確認して「保存」を押すと実際のAP設定に反映されます。`);
+  } catch (e) {
+    console.error('loadApPreset error:', e);
+    alert('プリセットの読み込みに失敗しました');
+  }
+}
+
+async function saveApPreset() {
+  const nameInput = document.getElementById('apPresetNameInput');
+  const name = nameInput ? nameInput.value.trim() : '';
+  if (!name) {
+    alert('プリセット名を入力してください');
+    return;
+  }
+
+  const rows = document.querySelectorAll('#apPositionsTableBody tr');
+  const positions = [];
+  for (const row of rows) {
+    const macInput = row.querySelector('input');
+    const posSelect = row.querySelector('select.ap-position-select');
+    const mac = macInput ? macInput.value.trim() : '';
+    const pos = posSelect ? parseInt(posSelect.value) : NaN;
+    if (!mac || isNaN(pos)) continue;
+    positions.push({ mac, position: pos });
+  }
+
+  if (positions.length === 0) {
+    alert('保存するAP設定がありません');
+    return;
+  }
+
+  try {
+    const res = await fetch('/api/ap_presets', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, positions })
+    });
+    if (!res.ok) {
+      const b = await res.json().catch(() => ({}));
+      alert('プリセットの保存に失敗しました: ' + (b.error || res.status));
+      return;
+    }
+    alert(`プリセット「${name}」を保存しました`);
+    await loadApPresetList();
+    const select = document.getElementById('apPresetSelect');
+    if (select) select.value = name;
+  } catch (e) {
+    console.error('saveApPreset error:', e);
+    alert('プリセットの保存に失敗しました');
+  }
+}
+
+async function deleteApPreset() {
+  const select = document.getElementById('apPresetSelect');
+  const name = select ? select.value : '';
+  if (!name) {
+    alert('削除するプリセットを選択してください');
+    return;
+  }
+  if (!confirm(`プリセット「${name}」を削除しますか？`)) return;
+
+  try {
+    const res = await fetch('/api/ap_presets', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name })
+    });
+    if (!res.ok) {
+      alert('削除に失敗しました');
+      return;
+    }
+    alert(`プリセット「${name}」を削除しました`);
+    await loadApPresetList();
+  } catch (e) {
+    console.error('deleteApPreset error:', e);
+    alert('削除に失敗しました');
+  }
 }
 
 
