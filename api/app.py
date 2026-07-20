@@ -122,6 +122,35 @@ def load_device_instructions():
         return []
 
 
+def sync_device_reports_from_wifi(reports):
+    """wifi_reports.report を device_instructions.report に同期する
+    （デバイス側の書き込み先移行が完了するまでの橋渡し）。
+    値が実際に変化したデバイスだけ upsert し、device_id -> device_instructions行 の辞書を返す。"""
+    instr_map = {d['device_id']: d for d in load_device_instructions() if d.get('device_id')}
+
+    for row in (reports or []):
+        device_id = row.get('device_id')
+        if not device_id:
+            continue
+        wifi_report = bool(row.get('report'))
+        current = instr_map.get(device_id)
+        if current is not None and bool(current.get('report')) == wifi_report:
+            continue
+        try:
+            supabase.table(TABLE_DEVICE_INSTRUCTIONS).upsert({
+                'device_id': device_id,
+                'report': wifi_report,
+            }).execute()
+            if current is not None:
+                current['report'] = wifi_report
+            else:
+                instr_map[device_id] = {'device_id': device_id, 'instruction': 'none', 'report': wifi_report}
+        except Exception as e:
+            print(f"Error syncing report for {device_id}: {e}")
+
+    return instr_map
+
+
 def load_ap_presets():
     try:
         response = supabase.table(TABLE_AP_PRESETS).select("*").order("name").execute()
@@ -423,6 +452,7 @@ def get_wifi_map():
     area_order = load_area_order()
 
     user_map = {u['device_id']: u['username'] for u in (load_user_table() or []) if u.get('device_id') and u.get('username')}
+    instruction_map = sync_device_reports_from_wifi(reports)
 
     workers = []
     for row in (reports or []):
@@ -450,7 +480,7 @@ def get_wifi_map():
         workers.append({
             'device_id': device_id,
             'username': user_map.get(device_id),
-            'report': row.get('report'),
+            'report': bool(instruction_map.get(device_id, {}).get('report')),
             'ratio': round(ratio, 4),
             'area_id': area_id,
         })
@@ -484,12 +514,16 @@ def handle_device_instructions():
     if instruction not in DEVICE_INSTRUCTIONS:
         return jsonify({'error': f'instruction は {sorted(DEVICE_INSTRUCTIONS)} のいずれかである必要があります'}), 400
 
+    payload = {
+        'device_id': device_id,
+        'instruction': instruction,
+        'updated_at': now_iso(),
+    }
+    if 'report' in data:
+        payload['report'] = bool(data.get('report'))
+
     try:
-        supabase.table(TABLE_DEVICE_INSTRUCTIONS).upsert({
-            'device_id': device_id,
-            'instruction': instruction,
-            'updated_at': now_iso(),
-        }).execute()
+        supabase.table(TABLE_DEVICE_INSTRUCTIONS).upsert(payload).execute()
         return jsonify({'message': 'device instruction saved'})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
