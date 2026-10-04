@@ -3,6 +3,7 @@ from supabase import create_client, Client
 from dotenv import load_dotenv
 from functools import wraps
 from datetime import datetime, timezone, timedelta
+from concurrent.futures import ThreadPoolExecutor
 import threading
 import json
 import os
@@ -23,7 +24,6 @@ supabase: Client = create_client(url, key)
 TABLE_AREA_STATUS = "area_status_v2"
 # TABLE_AREA_ORDER = "ap_area_order"
 TABLE_USER = "user"
-TABLE_WIFI_LOG = "wifi_reports"
 TABLE_WIFI_REPORTS = "latest_wifi_reports"
 TABLE_AP_POSITIONS = "ap_positions"
 TABLE_AP_PRESETS = "ap_position_presets"
@@ -40,17 +40,14 @@ last_seen_dict = {}
 # ==========================================
 
 def load_wifi_reports():
-    """wifi_reports から device_id ごとの最新レコードを返す（同一APに複数デバイスがいても全員返す）"""
+    """最新レポート用テーブルから位置推定に必要な列だけ取得する"""
     try:
-        response = supabase.table(TABLE_WIFI_LOG).select("*").order("id", desc=True).execute()
-        seen = set()
-        result = []
-        for row in (response.data or []):
-            did = row.get('device_id')
-            if did and did not in seen:
-                seen.add(did)
-                result.append(row)
-        return result
+        response = (
+            supabase.table(TABLE_WIFI_REPORTS)
+            .select("device_id, mac01, mac02, report, created_at")
+            .execute()
+        )
+        return [row for row in (response.data or []) if row.get('device_id')]
     except Exception as e:
         print(f"Error loading wifi_reports: {e}")
         return []
@@ -447,11 +444,18 @@ def handle_ap_presets():
 def get_wifi_map():
     AP_COUNT = 6
     AP_LABELS = ['1', '3', '4', '5', '6', '11']
-    reports = load_wifi_reports()
-    ap_pos = load_ap_positions()
-    area_order = load_area_order()
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        reports_future = executor.submit(load_wifi_reports)
+        positions_future = executor.submit(load_ap_positions)
+        area_order_future = executor.submit(load_area_order)
+        users_future = executor.submit(load_user_table)
 
-    user_map = {u['device_id']: u['username'] for u in (load_user_table() or []) if u.get('device_id') and u.get('username')}
+        reports = reports_future.result()
+        ap_pos = positions_future.result()
+        area_order = area_order_future.result()
+        users = users_future.result()
+
+    user_map = {u['device_id']: u['username'] for u in (users or []) if u.get('device_id') and u.get('username')}
     instruction_map = sync_device_reports_from_wifi(reports)
 
     workers = []
