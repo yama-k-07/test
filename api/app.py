@@ -6,6 +6,7 @@ from datetime import datetime, timezone, timedelta
 import threading
 import json
 import os
+import re
 import time
 
 load_dotenv()
@@ -31,6 +32,10 @@ TABLE_DEVICE_INSTRUCTIONS = "device_instructions"
 DEVICE_INSTRUCTIONS = {"none", "wait", "inward", "outward"}
 TABLE_ENTRY_CURRENT = "entry_current"
 TABLE_ENTRY_LOG = "entry_log"
+# 火災位置（管理マップで指定。1行だけ: id=1）と、ウォッチごとの「自分から見た火災の方向」。
+# スキーマは supabase/fire_location.sql。ウォッチは device_fire_alerts の自分の行を読む。
+TABLE_FIRE_LOCATION = "fire_location"
+TABLE_DEVICE_FIRE_ALERTS = "device_fire_alerts"
 
 entry_status_table = []
 last_seen_dict = {}
@@ -90,17 +95,31 @@ def now_iso():
 ONLINE_THRESHOLD_SEC = 60
 
 
-def is_recent(iso_str, threshold_sec=ONLINE_THRESHOLD_SEC):
-    """指定したISO日時文字列が現在時刻からthreshold_sec以内かどうか"""
+_FRACTION_RE = re.compile(r'\.(\d+)')
+
+
+def parse_ts(iso_str):
+    """Supabase の timestamptz 文字列を aware datetime にする。失敗したら None。
+    Python 3.10 の fromisoformat は小数秒が6桁以外（例 '.12345'）だと失敗するので6桁にそろえる。"""
     if not iso_str:
-        return False
+        return None
     try:
-        ts = datetime.fromisoformat(iso_str.replace('Z', '+00:00'))
+        s = iso_str.replace('Z', '+00:00')
+        s = _FRACTION_RE.sub(lambda m: '.' + m.group(1)[:6].ljust(6, '0'), s, count=1)
+        ts = datetime.fromisoformat(s)
         if ts.tzinfo is None:
             ts = ts.replace(tzinfo=timezone.utc)
-        return (datetime.now(timezone.utc) - ts).total_seconds() <= threshold_sec
-    except (ValueError, TypeError):
+        return ts
+    except (ValueError, TypeError, AttributeError):
+        return None
+
+
+def is_recent(iso_str, threshold_sec=ONLINE_THRESHOLD_SEC):
+    """指定したISO日時文字列が現在時刻からthreshold_sec以内かどうか"""
+    ts = parse_ts(iso_str)
+    if ts is None:
         return False
+    return (datetime.now(timezone.utc) - ts).total_seconds() <= threshold_sec
 
 
 JST = timezone(timedelta(hours=9))
@@ -170,6 +189,307 @@ def load_area_order():
     except Exception as e:
         print(f"Error loading area order: {e}")
         return []
+
+
+# ==========================================
+#  位置推定
+# ==========================================
+# ap_positions.position（位置番号 0〜5）ごとの表示名と、入口からの実距離[m]。
+# 画面の説明「0=入口1m 〜 5=奥11m」とラベルの通り、APは等間隔ではない。
+# AP を増減・移設したらここだけ直す（画面はこの値を /api/wifi_map から受け取って描く）。
+AP_LABELS = ['1', '3', '4', '5', '6', '11']
+AP_DISTANCES_M = [1.0, 3.0, 4.0, 5.0, 6.0, 11.0]
+AP_COUNT = len(AP_LABELS)
+TUNNEL_START_M = min(AP_DISTANCES_M)
+TUNNEL_END_M = max(AP_DISTANCES_M)
+
+# 平滑化: デバイスの最新レポートから遡って SMOOTHING_WINDOW_SEC 以内のレポートを
+# 新しいほど重く（半減期 SMOOTHING_HALF_LIFE_SEC）まとめる。
+# 重み付き中央値から OUTLIER_M 以上離れたサンプル（電波の一時的なブレ）は捨てる。
+SMOOTHING_WINDOW_SEC = 30
+SMOOTHING_HALF_LIFE_SEC = 8
+SMOOTHING_MAX_SAMPLES = 8
+OUTLIER_M = 5.0
+
+# 1レポート内の重み。mac01 は最も電波の強いAP、mac02 は2番目（ウォッチ側の仕様）なので、
+# 人は mac01 寄りにいる。値はシミュレーションで決めた（結果は SPEC.md §6.2）。
+MAC01_WEIGHT = 0.8
+
+
+def ap_distance_m(ap_pos, mac):
+    """MAC に対応する AP の入口からの距離[m]。未登録・範囲外なら None"""
+    pos = ap_pos.get(mac) if mac else None
+    try:
+        pos = int(pos)
+    except (TypeError, ValueError):
+        return None
+    if not (0 <= pos < AP_COUNT):
+        return None
+    return AP_DISTANCES_M[pos]
+
+
+def report_distance_m(row, ap_pos):
+    """1レポート分の推定距離[m]。mac01（最強）と mac02（2番目）を MAC01_WEIGHT で内分、片方だけならその AP"""
+    d1 = ap_distance_m(ap_pos, row.get('mac01'))
+    d2 = ap_distance_m(ap_pos, row.get('mac02'))
+    if d1 is not None and d2 is not None:
+        return MAC01_WEIGHT * d1 + (1 - MAC01_WEIGHT) * d2
+    return d1 if d1 is not None else d2
+
+
+def to_ratio(distance_m):
+    """距離[m] → マップ横軸の比率 0.0（入口側AP）〜 1.0（最奥AP）"""
+    span = TUNNEL_END_M - TUNNEL_START_M
+    if span <= 0:
+        return 0.0
+    return max(0.0, min(1.0, (distance_m - TUNNEL_START_M) / span))
+
+
+def weighted_median(samples):
+    """samples: [(value, weight)] の重み付き中央値"""
+    ordered = sorted(samples)
+    half = sum(w for _, w in ordered) / 2
+    acc = 0.0
+    for value, w in ordered:
+        acc += w
+        if acc >= half:
+            return value
+    return ordered[-1][0]
+
+
+def smooth_distance_m(samples):
+    """samples: [(distance_m, age_sec)]（age は最新レポートからの経過秒）→ 平滑化した距離[m]"""
+    weighted = [(d, 0.5 ** (age / SMOOTHING_HALF_LIFE_SEC)) for d, age in samples]
+    if len(weighted) == 1:
+        return weighted[0][0]
+    med = weighted_median(weighted)
+    kept = [(d, w) for d, w in weighted if abs(d - med) <= OUTLIER_M]
+    total = sum(w for _, w in kept)
+    return sum(d * w for d, w in kept) / total
+
+
+def load_recent_wifi_reports(window_sec=SMOOTHING_WINDOW_SEC * 2):
+    """平滑化用に直近 window_sec 秒の wifi_reports を新しい順で返す"""
+    since = (datetime.now(timezone.utc) - timedelta(seconds=window_sec)).isoformat()
+    try:
+        response = (
+            supabase.table(TABLE_WIFI_LOG)
+            .select("device_id, mac01, mac02, created_at")
+            .gte("created_at", since)
+            .order("id", desc=True)
+            .limit(1000)
+            .execute()
+        )
+        return response.data or []
+    except Exception as e:
+        print(f"Error loading recent wifi_reports: {e}")
+        return []
+
+
+def area_centers_m(area_rows, ap_pos):
+    """エリア割当設定（area_status_v2.bssid）の AP が AP位置設定にあれば、その距離をエリアの中心とする"""
+    centers = {}
+    for row in (area_rows or []):
+        d = ap_distance_m(ap_pos, row.get('bssid'))
+        if row.get('area_id') and d is not None:
+            centers[row['area_id']] = d
+    return centers
+
+
+def build_area_layout(area_order, centers):
+    """マップ上のエリア区間 [{area_id, start, end}]（比率）。
+    全エリアに中心があれば中心間の中点で区切る（＝最寄りのエリアに割り当て）。無ければ従来どおり等分。"""
+    n = len(area_order)
+    if n == 0:
+        return []
+    if all(a in centers for a in area_order):
+        ordered = sorted(area_order, key=lambda a: centers[a])
+        layout = []
+        for i, a in enumerate(ordered):
+            start = 0.0 if i == 0 else to_ratio((centers[ordered[i - 1]] + centers[a]) / 2)
+            end = 1.0 if i == n - 1 else to_ratio((centers[a] + centers[ordered[i + 1]]) / 2)
+            layout.append({'area_id': a, 'start': round(start, 4), 'end': round(end, 4)})
+        return layout
+    return [{'area_id': a, 'start': round(i / n, 4), 'end': round((i + 1) / n, 4)} for i, a in enumerate(area_order)]
+
+
+def area_for_ratio(layout, ratio):
+    for seg in layout:
+        if ratio < seg['end']:
+            return seg['area_id']
+    return layout[-1]['area_id'] if layout else None
+
+
+def estimate_positions(latest_reports, ap_pos, area_order, area_rows):
+    """デバイスごとの推定位置を返す。
+    戻り値: (positions, layout)
+      positions: {device_id: {'distance_m', 'ratio', 'area_id', 'samples', 'approx'}}（推定できないデバイスは含まない）
+        approx=True は AP位置設定では位置が出せず、エリア割当の BSSID 一致だけで決めたもの（ratio はエリアの中央）
+      layout: build_area_layout の結果
+
+    エリアの決め方（上ほど優先）:
+      1. 全エリアの BSSID が AP位置設定にある → 平滑化した距離に最も近いエリア
+      2. 最新レポートの mac01 / mac02 がエリア割当の BSSID と一致 → そのエリア（従来のエリアボードの方式）
+      3. 平滑化した距離でトンネルを等分したエリア（従来のトンネルマップの方式）"""
+    centers = area_centers_m(area_rows, ap_pos)
+    layout = build_area_layout(area_order, centers)
+    centered = bool(layout) and all(a in centers for a in area_order)
+    bssid_area = {row['bssid']: row['area_id'] for row in (area_rows or []) if row.get('bssid') and row.get('area_id')}
+    segment = {seg['area_id']: seg for seg in layout}
+
+    history = {}
+    for row in load_recent_wifi_reports():
+        did = row.get('device_id')
+        if did:
+            history.setdefault(did, []).append(row)
+
+    positions = {}
+    for latest in (latest_reports or []):
+        did = latest.get('device_id')
+        if not did:
+            continue
+        latest_ts = parse_ts(latest.get('created_at'))
+
+        rows = history.get(did) or [latest]
+        samples = []
+        for row in rows[:SMOOTHING_MAX_SAMPLES]:
+            d = report_distance_m(row, ap_pos)
+            if d is None:
+                continue
+            ts = parse_ts(row.get('created_at'))
+            age = (latest_ts - ts).total_seconds() if (latest_ts and ts) else 0.0
+            if age < 0 or age > SMOOTHING_WINDOW_SEC:
+                continue
+            samples.append((d, age))
+
+        direct_area = bssid_area.get(latest.get('mac01')) or bssid_area.get(latest.get('mac02'))
+
+        # 最新レポートで AP が分からない時に、古い位置で表示し続けない
+        if report_distance_m(latest, ap_pos) is None or not samples:
+            seg = segment.get(direct_area)
+            if seg is None:
+                continue
+            positions[did] = {
+                'distance_m': None,
+                'ratio': round((seg['start'] + seg['end']) / 2, 4),
+                'area_id': direct_area,
+                'samples': 0,
+                'approx': True,
+            }
+            continue
+
+        distance = smooth_distance_m(samples)
+        ratio = to_ratio(distance)
+        if centered or not direct_area:
+            area_id = area_for_ratio(layout, ratio)
+        else:
+            area_id = direct_area
+        positions[did] = {
+            'distance_m': round(distance, 2),
+            'ratio': round(ratio, 4),
+            'area_id': area_id,
+            'samples': len(samples),
+            'approx': False,
+        }
+    return positions, layout
+
+
+# ==========================================
+#  火災位置
+# ==========================================
+# 火災までの距離がこれ以内なら「すぐ近く」（位置推定の誤差が約1〜2mのため）
+FIRE_NEAR_M = 2.0
+
+
+def ratio_to_distance_m(ratio):
+    return TUNNEL_START_M + max(0.0, min(1.0, ratio)) * (TUNNEL_END_M - TUNNEL_START_M)
+
+
+def load_fire_location():
+    """{'active': bool, 'distance_m': float|None, 'updated_at'}。テーブルが無い・未設定なら active=False"""
+    try:
+        res = supabase.table(TABLE_FIRE_LOCATION).select("*").eq("id", 1).execute()
+        row = (res.data or [None])[0]
+    except Exception as e:
+        print(f"Error loading fire_location: {e}")
+        row = None
+    if not row or not row.get('active') or row.get('distance_m') is None:
+        return {'active': False, 'distance_m': None, 'updated_at': (row or {}).get('updated_at')}
+    return {'active': True, 'distance_m': float(row['distance_m']), 'updated_at': row.get('updated_at')}
+
+
+def fire_relation(worker_m, fire_m):
+    """作業者から見た火災の方向と距離。
+    direction: 'inward'（奥側）/ 'outward'（入口側）/ 'near'（すぐ近く）"""
+    diff = fire_m - worker_m
+    distance = round(abs(diff), 1)
+    if abs(diff) <= FIRE_NEAR_M:
+        return 'near', distance, f"火災: すぐ近く（約{distance:.0f}m）"
+    if diff > 0:
+        return 'inward', distance, f"火災: 奥 約{distance:.0f}m"
+    return 'outward', distance, f"火災: 手前 約{distance:.0f}m"
+
+
+def build_fire_alerts(device_ids, positions, fire):
+    """device_fire_alerts に書く行 {device_id: row}。
+    位置が分からないデバイスは direction='unknown'（火災が出ていることだけ知らせる）"""
+    alerts = {}
+    for did in device_ids:
+        row = {
+            'device_id': did,
+            'fire_active': fire['active'],
+            'direction': None,
+            'distance_m': None,
+            'message': None,
+            'approx': False,
+        }
+        if fire['active']:
+            pos = positions.get(did)
+            if pos is None:
+                row.update(direction='unknown', message='火災発生: 位置不明。管理者の指示に従ってください')
+            else:
+                worker_m = pos['distance_m'] if pos['distance_m'] is not None else ratio_to_distance_m(pos['ratio'])
+                direction, distance, message = fire_relation(worker_m, fire['distance_m'])
+                row.update(direction=direction, distance_m=distance, message=message, approx=bool(pos['approx']))
+        alerts[did] = row
+    return alerts
+
+
+_ALERT_KEYS = ('fire_active', 'direction', 'distance_m', 'message', 'approx')
+
+
+def sync_device_fire_alerts(alerts):
+    """内容が変わったデバイスの行だけ upsert する（5秒ごとに呼ばれるため）"""
+    if not alerts:
+        return
+    try:
+        res = supabase.table(TABLE_DEVICE_FIRE_ALERTS).select("*").execute()
+        current = {r['device_id']: r for r in (res.data or []) if r.get('device_id')}
+    except Exception as e:
+        print(f"Error loading device_fire_alerts: {e}")
+        return
+
+    changed = []
+    for did, row in alerts.items():
+        cur = current.get(did)
+        if cur is not None and all(cur.get(k) == row[k] for k in _ALERT_KEYS):
+            continue
+        changed.append({**row, 'updated_at': now_iso()})
+    if not changed:
+        return
+    try:
+        supabase.table(TABLE_DEVICE_FIRE_ALERTS).upsert(changed).execute()
+    except Exception as e:
+        print(f"Error syncing device_fire_alerts: {e}")
+
+
+def update_fire_alerts(reports, positions, fire):
+    """最新レポートのある全デバイスと登録ユーザーの device_fire_alerts を最新化し、alerts を返す"""
+    device_ids = {r.get('device_id') for r in (reports or []) if r.get('device_id')}
+    device_ids |= {u.get('device_id') for u in (load_user_table() or []) if u.get('device_id')}
+    alerts = build_fire_alerts(sorted(device_ids), positions, fire)
+    sync_device_fire_alerts(alerts)
+    return alerts
 
 
 # def get_wifi_credentials():
@@ -445,58 +765,95 @@ def handle_ap_presets():
 @app.route('/api/wifi_map', methods=['GET'])
 @login_required
 def get_wifi_map():
-    AP_COUNT = 6
-    AP_LABELS = ['1', '3', '4', '5', '6', '11']
     reports = load_wifi_reports()
     ap_pos = load_ap_positions()
     area_order = load_area_order()
+    positions, layout = estimate_positions(reports, ap_pos, area_order, load_area_table())
 
     user_map = {u['device_id']: u['username'] for u in (load_user_table() or []) if u.get('device_id') and u.get('username')}
     instruction_map = sync_device_reports_from_wifi(reports)
-
-    workers = []
-    for row in (reports or []):
-        device_id = row.get('device_id')
-        mac1 = row.get('mac01')
-        mac2 = row.get('mac02')
-
-        pos1 = ap_pos.get(mac1)
-        pos2 = ap_pos.get(mac2)
-
-        if pos1 is None and pos2 is None:
-            continue
-
-        if pos1 is not None and pos2 is not None:
-            ratio = (pos1 / (AP_COUNT - 1) + pos2 / (AP_COUNT - 1)) / 2
-        elif pos1 is not None:
-            ratio = pos1 / (AP_COUNT - 1)
-        else:
-            ratio = pos2 / (AP_COUNT - 1)
-
-        n = len(area_order)
-        area_idx = min(int(ratio * n), n - 1) if n > 0 else 0
-        area_id = area_order[area_idx] if area_order else None
-
-        workers.append({
-            'device_id': device_id,
-            'username': user_map.get(device_id),
-            'report': bool(instruction_map.get(device_id, {}).get('report')),
-            'ratio': round(ratio, 4),
-            'area_id': area_id,
-        })
 
     online_device_ids = sorted({
         row.get('device_id') for row in (reports or [])
         if row.get('device_id') and is_recent(row.get('created_at'))
     })
+    online_set = set(online_device_ids)
+
+    # 火災位置が出ていれば、各ウォッチ向けの「自分から見た火災の方向」を更新する
+    fire = load_fire_location()
+    alerts = update_fire_alerts(reports, positions, fire)
+
+    workers = []
+    for row in (reports or []):
+        device_id = row.get('device_id')
+        pos = positions.get(device_id)
+        if pos is None:
+            continue
+        alert = alerts.get(device_id) or {}
+        workers.append({
+            'device_id': device_id,
+            'username': user_map.get(device_id),
+            'report': bool(instruction_map.get(device_id, {}).get('report')),
+            'ratio': pos['ratio'],
+            'distance_m': pos['distance_m'],
+            'area_id': pos['area_id'],
+            'approx': pos['approx'],
+            'online': device_id in online_set,
+            'fire_message': alert.get('message'),
+        })
 
     return jsonify({
         'workers': workers,
         'ap_count': AP_COUNT,
         'ap_labels': AP_LABELS,
+        'ap_markers': [
+            {'label': label, 'distance_m': d, 'ratio': round(to_ratio(d), 4)}
+            for label, d in zip(AP_LABELS, AP_DISTANCES_M)
+        ],
         'area_order': area_order,
+        'area_layout': layout,
         'online_device_ids': online_device_ids,
+        'fire': {
+            'active': fire['active'],
+            'distance_m': fire['distance_m'],
+            'ratio': round(to_ratio(fire['distance_m']), 4) if fire['active'] else None,
+        },
     })
+
+
+@app.route('/api/fire_location', methods=['GET', 'POST', 'DELETE'])
+@login_required
+def handle_fire_location():
+    """管理マップで指定した火災位置。POST {ratio}（マップ横軸 0〜1）か {distance_m}、DELETE で解除。
+    保存後すぐに各ウォッチ向けの device_fire_alerts も更新する"""
+    if request.method == 'GET':
+        return jsonify(load_fire_location())
+
+    if request.method == 'POST':
+        data = request.json or {}
+        try:
+            if data.get('distance_m') is not None:
+                distance = float(data['distance_m'])
+            else:
+                distance = ratio_to_distance_m(float(data['ratio']))
+        except (KeyError, TypeError, ValueError):
+            return jsonify({'error': 'ratio（0〜1）か distance_m を数値で指定してください'}), 400
+        distance = round(max(TUNNEL_START_M, min(TUNNEL_END_M, distance)), 1)
+        payload = {'id': 1, 'active': True, 'distance_m': distance, 'updated_at': now_iso()}
+    else:
+        payload = {'id': 1, 'active': False, 'distance_m': None, 'updated_at': now_iso()}
+
+    try:
+        supabase.table(TABLE_FIRE_LOCATION).upsert(payload).execute()
+    except Exception as e:
+        # 例外の詳細はサーバーログにだけ出す（画面には返さない）
+        print(f"Error saving fire_location: {e}")
+        return jsonify({'error': '火災位置の保存に失敗しました（supabase/fire_location.sql は実行済みですか？）'}), 500
+
+    reports = load_wifi_reports()
+    positions, _ = estimate_positions(reports, load_ap_positions(), load_area_order(), load_area_table())
+    update_fire_alerts(reports, positions, load_fire_location())
+    return jsonify({'message': 'fire location saved', 'fire': load_fire_location()})
 
 
 @app.route('/api/device_instructions', methods=['GET', 'POST'])
@@ -561,31 +918,23 @@ def handle_area_order():
 
 @app.route('/api/entry_status', methods=['GET'])
 def Location_estimation():
+    """エリアボード用。トンネルマップ（/api/wifi_map）と同じ estimate_positions でエリアを決める"""
     dev_info = load_wifi_reports() or []
 
     try:
-        r = supabase.table(TABLE_AREA_STATUS).select("bssid, area_id").execute()
-        area_rows = getattr(r, "data", []) or []
-        area_dict = {}
-        for item in area_rows:
-            bssid = item.get("bssid")
-            if bssid is not None:
-                area_dict[bssid] = item.get("area_id") or item.get("area")
+        positions, _ = estimate_positions(dev_info, load_ap_positions(), load_area_order(), load_area_table())
 
-        r = supabase.table(TABLE_USER).select("*").execute()
-        user_rows = getattr(r, "data", []) or []
         user_dict = {}
-        for item in user_rows:
+        for item in (load_user_table() or []):
             device_id = item.get("device_id")
             if device_id is not None:
                 user_dict[device_id] = item.get("username")
 
         output = []
         for item in dev_info:
-            mac = item.get("mac01")
             device_id = item.get("device_id")
             output.append({
-                "area_id": area_dict.get(mac),
+                "area_id": (positions.get(device_id) or {}).get("area_id"),
                 "username": user_dict.get(device_id),
                 "device_id": device_id,
             })

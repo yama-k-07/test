@@ -8,7 +8,6 @@ let lastAreaMapSig = null;
 let lastUserListSig = null;
 let lastEntryStatusSig = null;
 let lastEntryLogSig = null;
-let lastDeviceInstructionSig = null;
 
 document.addEventListener('focusin', e => {
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') {
@@ -95,11 +94,14 @@ function createAreaCard(area, users) {
 
   col.dataset.areaId = area.area_id;
 
-  const userList = users.map(u => `<li>${u}</li>`).join("");
+  const userList = users.length
+    ? users.map(u => `<li>${escapeHtml(u)}</li>`).join("")
+    : `<li class="entry-list-empty">なし</li>`;
 
   col.innerHTML = `
-    <div class="box areacard">
-      <h2> ${area.area_id}</h2><br>
+    <div class="box areacard" data-instruction="${escapeHtml(area.instruction || 'none')}">
+      <h2>${escapeHtml(area.area_id)}</h2>
+      <p class="area-fire-banner">火災通報あり</p>
 
       <div class="field">
         <label class="label">指示</label>
@@ -113,20 +115,22 @@ function createAreaCard(area, users) {
       <div class="field">
         <label class="checkbox">
           <input type="checkbox" class="fire" ${area.fire ? "checked" : ""}>
-          火災通報有無
+          火災通報
         </label>
       </div>
 
-      <div class="content">
-        <strong>入場者 (${users.length})</strong>
+      <div class="content area-entries">
+        <p class="area-entries-title">入場者 <span class="area-entries-count">${users.length}</span></p>
         <ul class="entry-list">${userList}</ul>
       </div>
     </div>
   `;
+  const cardEl = col.querySelector(".areacard");
   const instructionEl = col.querySelector(".instruction");
   const fireEl = col.querySelector(".fire");
 
   const save = () => {
+    cardEl.dataset.instruction = instructionEl.value;
     isEditing = true;
     saveAreaState(
       area.area_id,
@@ -144,10 +148,19 @@ function createAreaCard(area, users) {
 
 
 // ===== 指示セレクトHTML =====
+// 値（DB・デバイスに送る値）はそのまま、表示だけ日本語にする
+const AREA_INSTRUCTION_LABELS = {
+  none: "指示なし",
+  waiting: "待機",
+  evacuate_exit: "出口へ避難",
+  evacuate_upwind: "風上へ避難",
+  alert: "警戒",
+};
+
 function instructionOptions(current) {
   const list = ["none", "waiting", "evacuate_exit", "evacuate_upwind", "alert"];
   return list.map(v =>
-    `<option value="${v}" ${v === current ? "selected" : ""}>${v}</option>`
+    `<option value="${v}" ${v === current ? "selected" : ""}>${AREA_INSTRUCTION_LABELS[v]}</option>`
   ).join("");
 }
 
@@ -161,7 +174,7 @@ async function saveInstruction(areaId, instruction) {
   isEditing = false;
 }
 
-// ======== デバイス指示 ========
+// ======== デバイス指示（トンネルマップのアイコンから送る） ========
 const DEVICE_INSTRUCTION_LABELS = [
   { value: 'none', label: 'なし' },
   { value: 'wait', label: '待て' },
@@ -169,43 +182,22 @@ const DEVICE_INSTRUCTION_LABELS = [
   { value: 'outward', label: '手前へ' },
 ];
 
-function deviceInstructionOptions(current) {
-  return DEVICE_INSTRUCTION_LABELS.map(o =>
-    `<option value="${o.value}" ${o.value === current ? 'selected' : ''}>${o.label}</option>`
-  ).join('');
+// device_id -> instruction（/api/device_instructions の最新値）
+let deviceInstructionMap = {};
+// 直近の描画での作業者アイコンの位置（クリック判定用）
+let tunnelMapHitboxes = [];
+// ポップアップを開いているデバイス
+let popupDeviceId = null;
+
+function escapeHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+  ));
 }
 
-function createDeviceInstructionCard(user, instruction, online) {
-  const col = document.createElement('div');
-  col.className = 'area-card';
-  col.dataset.deviceId = user.device_id;
-
-  const label = user.username || user.device_id || '?';
-
-  col.innerHTML = `
-    <div class="box areacard">
-      <h2>${label}</h2>
-      <div style="text-align:center; margin: 6px 0 10px;">
-        <span class="entry-badge ${online ? 'entry-in' : 'entry-out'}">${online ? 'オンライン' : 'オフライン'}</span>
-      </div>
-      <div class="field">
-        <label class="label">指示</label>
-        <div class="control">
-          <select class="select device-instruction">
-            ${deviceInstructionOptions(instruction)}
-          </select>
-        </div>
-      </div>
-    </div>
-  `;
-
-  const select = col.querySelector('.device-instruction');
-  select.addEventListener('change', () => {
-    isEditing = true;
-    saveDeviceInstruction(user.device_id, select.value);
-  });
-
-  return col;
+function deviceInstructionLabel(value) {
+  const o = DEVICE_INSTRUCTION_LABELS.find(o => o.value === value);
+  return o ? o.label : 'なし';
 }
 
 async function saveDeviceInstruction(deviceId, instruction) {
@@ -218,69 +210,290 @@ async function saveDeviceInstruction(deviceId, instruction) {
     if (!res.ok) {
       const b = await res.json().catch(() => ({}));
       alert('指示の送信に失敗しました: ' + (b.error || res.status));
+      return false;
     }
+    return true;
   } catch (e) {
     console.error('saveDeviceInstruction error:', e);
     alert('指示の送信に失敗しました');
+    return false;
   } finally {
     isEditing = false;
   }
 }
 
-async function loadDeviceInstructionBoard() {
-  if (isEditing) return;
+function findWorkerAt(x, y) {
+  // 後から描いた（上に重なっている）アイコンを優先
+  for (let i = tunnelMapHitboxes.length - 1; i >= 0; i--) {
+    const h = tunnelMapHitboxes[i];
+    if ((x - h.cx) ** 2 + (y - h.cy) ** 2 <= h.r ** 2) return h;
+  }
+  return null;
+}
 
-  const board = document.getElementById('deviceInstructionBoard');
-  if (!board) return;
+function openWorkerPopup(worker) {
+  const popup = document.getElementById('workerPopup');
+  if (!popup) return;
 
-  let users, onlineIds, instructions;
-  try {
-    const [usersRes, wifiRes, instrRes] = await Promise.all([
-      fetch('/api/user'),
-      fetch('/api/wifi_map'),
-      fetch('/api/device_instructions')
-    ]);
-    if (!usersRes.ok || !wifiRes.ok || !instrRes.ok) {
-      console.error('loadDeviceInstructionBoard: APIエラー', usersRes.status, wifiRes.status, instrRes.status);
+  popupDeviceId = worker.device_id;
+  if (lastWifiMapData) renderTunnelMap(lastWifiMapData);
+  const online = (lastWifiMapData?.online_device_ids || []).includes(worker.device_id);
+  const current = deviceInstructionMap[worker.device_id] || 'none';
+  const label = worker.username || worker.device_id || '?';
+
+  popup.innerHTML = `
+    <div class="worker-popup-head">
+      <strong>${escapeHtml(label)}</strong>
+      <span class="entry-badge ${online ? 'entry-in' : 'entry-out'}">${online ? 'オンライン' : 'オフライン'}</span>
+      <button type="button" class="delete is-small worker-popup-close" aria-label="閉じる"></button>
+    </div>
+    <p class="worker-popup-current">現在の指示: ${deviceInstructionLabel(current)}</p>
+    ${worker.fire_message ? `<p class="worker-popup-fire">ウォッチの表示: ${escapeHtml(worker.fire_message)}</p>` : ''}
+    <div class="buttons are-small worker-popup-buttons">
+      ${DEVICE_INSTRUCTION_LABELS.map(o => `
+        <button type="button" class="button ${o.value === current ? 'is-link' : ''}" data-instruction="${o.value}">${o.label}</button>
+      `).join('')}
+    </div>
+  `;
+
+  popup.querySelector('.worker-popup-close').addEventListener('click', closeWorkerPopup);
+  popup.querySelectorAll('[data-instruction]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const instruction = btn.dataset.instruction;
+      popup.querySelectorAll('button').forEach(b => { b.disabled = true; });
+      const ok = await saveDeviceInstruction(worker.device_id, instruction);
+      if (ok) {
+        deviceInstructionMap[worker.device_id] = instruction;
+        if (lastWifiMapData) renderTunnelMap(lastWifiMapData);
+        closeWorkerPopup();
+      } else {
+        popup.querySelectorAll('button').forEach(b => { b.disabled = false; });
+      }
+    });
+  });
+
+  // アイコンの横に表示（マップからはみ出さないように寄せる）
+  popup.hidden = false;
+  const wrap = popup.parentElement;
+  const maxLeft = wrap.clientWidth - popup.offsetWidth - 4;
+  const left = Math.max(4, Math.min(maxLeft, worker.cx + worker.r + 8));
+  const top = Math.max(4, worker.cy - popup.offsetHeight / 2);
+  popup.style.left = `${left}px`;
+  popup.style.top = `${top}px`;
+}
+
+function closeWorkerPopup() {
+  const popup = document.getElementById('workerPopup');
+  if (popup) {
+    popup.hidden = true;
+    popup.innerHTML = '';
+  }
+  if (popupDeviceId === null) return;
+  popupDeviceId = null;
+  if (lastWifiMapData) renderTunnelMap(lastWifiMapData);
+}
+
+function initTunnelMapInteraction() {
+  const canvas = document.getElementById('tunnelMap');
+  if (!canvas) return;
+
+  canvas.addEventListener('click', e => {
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    e.stopPropagation();
+    if (fireMode) {
+      const ratio = mapXToRatio(x);
+      if (ratio !== null) placeFireLocation(ratio);
       return;
     }
-    users = await usersRes.json();
-    const wifiData = await wifiRes.json();
-    onlineIds = wifiData.online_device_ids;
-    instructions = await instrRes.json();
-  } catch (e) {
-    console.error('loadDeviceInstructionBoard fetch error:', e);
-    return;
-  }
-
-  if (!Array.isArray(users) || !Array.isArray(onlineIds) || !Array.isArray(instructions)) {
-    console.error('loadDeviceInstructionBoard: 想定外のレスポンス形式', { users, onlineIds, instructions });
-    return;
-  }
-
-  const sig = JSON.stringify({ users, onlineIds, instructions });
-  if (sig === lastDeviceInstructionSig) return;
-  lastDeviceInstructionSig = sig;
-
-  const onlineSet = new Set(onlineIds);
-  const instrMap = {};
-  instructions.forEach(i => { instrMap[i.device_id] = i.instruction; });
-
-  board.innerHTML = '';
-
-  const devices = users.filter(u => u.device_id);
-  if (devices.length === 0) {
-    const empty = document.createElement('div');
-    empty.className = 'worker-empty';
-    empty.textContent = '登録済みのデバイスがありません';
-    board.appendChild(empty);
-    return;
-  }
-
-  devices.forEach(u => {
-    const card = createDeviceInstructionCard(u, instrMap[u.device_id] || 'none', onlineSet.has(u.device_id));
-    board.appendChild(card);
+    const hit = findWorkerAt(x, y);
+    if (hit) openWorkerPopup(hit);
+    else closeWorkerPopup();
   });
+
+  canvas.addEventListener('mousemove', e => {
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    if (fireMode) {
+      fireHoverRatio = mapXToRatio(x);
+      canvas.style.cursor = fireHoverRatio === null ? 'not-allowed' : 'crosshair';
+      if (lastWifiMapData) renderTunnelMap(lastWifiMapData);
+      return;
+    }
+    canvas.style.cursor = findWorkerAt(x, e.clientY - rect.top) ? 'pointer' : 'default';
+  });
+
+  canvas.addEventListener('mouseleave', () => {
+    if (fireHoverRatio === null) return;
+    fireHoverRatio = null;
+    if (lastWifiMapData) renderTunnelMap(lastWifiMapData);
+  });
+
+  document.addEventListener('click', e => {
+    if (!popupDeviceId) return;
+    const popup = document.getElementById('workerPopup');
+    if (popup && !popup.contains(e.target)) closeWorkerPopup();
+  });
+
+  document.addEventListener('keydown', e => {
+    if (e.key !== 'Escape') return;
+    closeWorkerPopup();
+    if (fireMode) toggleFireMode();
+  });
+}
+
+
+// ======== 火災位置（マップをクリックして指定 → 各ウォッチに方向と距離を通知） ========
+let fireMode = false;
+let fireHoverRatio = null;
+// renderTunnelMap が描いたトンネルの位置（クリック座標 → 比率の変換用）
+let tunnelGeom = null;
+
+function mapXToRatio(x) {
+  if (!tunnelGeom) return null;
+  const { tX, tW } = tunnelGeom;
+  if (x < tX - 4 || x > tX + tW + 4) return null;
+  return Math.max(0, Math.min(1, (x - tX) / tW));
+}
+
+// マップ横軸の比率 → 入口からの距離[m]（ap_markers の両端から求める）
+function ratioToDistanceM(ratio) {
+  const markers = lastWifiMapData?.ap_markers || [];
+  if (markers.length < 2) return null;
+  const start = markers[0].distance_m;
+  const end = markers[markers.length - 1].distance_m;
+  return start + ratio * (end - start);
+}
+
+function toggleFireMode() {
+  fireMode = !fireMode;
+  fireHoverRatio = null;
+  closeWorkerPopup();
+  const btn = document.getElementById('fireModeBtn');
+  const canvas = document.getElementById('tunnelMap');
+  if (btn) {
+    btn.textContent = fireMode ? '指定をやめる' : '火災位置を指定';
+    btn.classList.toggle('is-outlined', fireMode);
+  }
+  if (canvas) {
+    canvas.classList.toggle('is-fire-mode', fireMode);
+    canvas.style.cursor = 'default';
+  }
+  updateFireStatus();
+  if (lastWifiMapData) renderTunnelMap(lastWifiMapData);
+}
+
+async function placeFireLocation(ratio) {
+  const m = ratioToDistanceM(ratio);
+  const where = m === null ? 'この位置' : `入口から約${m.toFixed(1)}mの位置`;
+  if (!confirm(`${where}を火災位置にして、全ウォッチに通知しますか？`)) return;
+  try {
+    const res = await fetch('/api/fire_location', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ratio })
+    });
+    if (!res.ok) {
+      const b = await res.json().catch(() => ({}));
+      alert('火災位置の保存に失敗しました: ' + (b.error || res.status));
+      return;
+    }
+  } catch (e) {
+    console.error('placeFireLocation error:', e);
+    alert('火災位置の保存に失敗しました');
+    return;
+  }
+  if (fireMode) toggleFireMode();
+  loadTunnelMap();
+}
+
+async function clearFireLocation() {
+  if (!confirm('火災位置を解除して、全ウォッチの火災通知を止めますか？')) return;
+  try {
+    const res = await fetch('/api/fire_location', { method: 'DELETE' });
+    if (!res.ok) {
+      const b = await res.json().catch(() => ({}));
+      alert('火災位置の解除に失敗しました: ' + (b.error || res.status));
+      return;
+    }
+  } catch (e) {
+    console.error('clearFireLocation error:', e);
+    alert('火災位置の解除に失敗しました');
+    return;
+  }
+  loadTunnelMap();
+}
+
+function updateFireStatus() {
+  const status = document.getElementById('fireStatus');
+  const clearBtn = document.getElementById('fireClearBtn');
+  const fire = lastWifiMapData?.fire;
+  const active = !!(fire && fire.active);
+  if (clearBtn) clearBtn.disabled = !active;
+  if (!status) return;
+  status.classList.toggle('is-active', active && !fireMode);
+  if (fireMode) {
+    status.textContent = 'マップ上の火災の位置をクリックしてください（Escでやめる）';
+  } else if (active) {
+    status.textContent = `火災位置: 入口から約${Number(fire.distance_m).toFixed(1)}m（ウォッチに通知中）`;
+  } else {
+    status.textContent = '火災位置: 未設定';
+  }
+}
+
+// 火災位置の目印（赤い帯＋ドット絵の炎）
+function drawFireMarker(ctx, x, tY, tH, label, preview) {
+  ctx.save();
+  ctx.globalAlpha = preview ? 0.5 : 1;
+  ctx.fillStyle = 'rgba(198, 40, 40, 0.18)';
+  ctx.fillRect(x - 14, tY, 28, tH);
+  ctx.strokeStyle = '#c62828';
+  ctx.lineWidth = 2;
+  ctx.setLineDash(preview ? [4, 4] : []);
+  ctx.beginPath();
+  ctx.moveTo(x, tY);
+  ctx.lineTo(x, tY + tH);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // 3px 単位のドットで炎を描く
+  const P = 3;
+  const flame = [
+    '...r...',
+    '..rr...',
+    '..rrr..',
+    '.rryrr.',
+    '.ryyyr.',
+    'rryyyrr',
+    'ryyWyyr',
+    '.ryyyr.',
+  ];
+  const fx = x - (flame[0].length * P) / 2;
+  const fy = tY + 4;
+  const colors = { r: '#c62828', y: '#ffb300', W: '#fff3c4' };
+  flame.forEach((row, j) => {
+    [...row].forEach((c, i) => {
+      if (c === '.') return;
+      ctx.fillStyle = colors[c];
+      ctx.fillRect(fx + i * P, fy + j * P, P, P);
+    });
+  });
+
+  if (label) {
+    ctx.font = "12px 'DotGothic16', sans-serif";
+    const w = ctx.measureText(label).width + 10;
+    const lx = Math.max(2, Math.min(ctx.canvas.width - w - 2, x - w / 2));
+    const ly = tY + tH - 22;
+    ctx.fillStyle = '#c62828';
+    ctx.fillRect(lx, ly, w, 18);
+    ctx.fillStyle = '#fff';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(label, lx + 5, ly + 9);
+    ctx.textBaseline = 'alphabetic';
+  }
+  ctx.restore();
 }
 
 
@@ -399,8 +612,8 @@ async function loadUserTable() {
     row.dataset.originalUser = item.username || '';
     row.dataset.originalDeviceId = item.device_id || '';
     row.innerHTML = `
-      <td><input class="input" type="text" value="${usernameVal}"></td>
-      <td><input class="input" type="text" value="${device_idVal}"></td>
+      <td><input class="input" type="text" value="${escapeHtml(usernameVal)}"></td>
+      <td><input class="input" type="text" value="${escapeHtml(device_idVal)}"></td>
       <td><button class="button is-danger" onclick="removeRow(this)">削除</button></td>
     `;
     // row.innerHTML = `
@@ -418,8 +631,8 @@ async function loadUserTable() {
     const u = unsaved[i];
     const row = document.createElement('tr');
     row.innerHTML = `
-      <td><input class="input" type="text" value="${u.username}"></td>
-      <td><input class="input" type="text" value="${u.device_id}"></td>
+      <td><input class="input" type="text" value="${escapeHtml(u.username)}"></td>
+      <td><input class="input" type="text" value="${escapeHtml(u.device_id)}"></td>
       <td><button class="button is-danger" onclick="removeRow(this)">削除</button></td>
     `;
     body.appendChild(row);
@@ -513,7 +726,7 @@ async function loadAreaTable() {
     const row = document.createElement('tr');
     const use = current[item.area_id] || { instruction: item.instruction, fire: item.fire };
     row.innerHTML = `
-      <td><input class="input" type="text" value="${item.area_id}" disabled></td>
+      <td><input class="input" type="text" value="${escapeHtml(item.area_id)}" disabled></td>
       <td>
         <select class="select">
           <option value="none" ${use.instruction === 'none' ? 'selected' : ''}>none</option>
@@ -581,9 +794,9 @@ async function loadEntryTable() {
     entryList.forEach(item => {
       const row = document.createElement('tr');
       row.innerHTML = `
-        <td>${item.device_id}</td>
-        <td>${item.area_id}</td>
-        <td>${item.username || ''}</td>
+        <td>${escapeHtml(item.device_id)}</td>
+        <td>${escapeHtml(item.area_id)}</td>
+        <td>${escapeHtml(item.username || '')}</td>
       `;
       body.appendChild(row);
     });
@@ -623,8 +836,8 @@ async function loadAreaMapTable() {
     const row = document.createElement('tr');
     row.dataset.originalArea = item.area_id || '';
     row.innerHTML = `
-      <td><input class="input" type="text" value="${item.area_id}"></td>
-      <td><input class="input" type="text" value="${item.bssid}"></td>
+      <td><input class="input" type="text" value="${escapeHtml(item.area_id)}"></td>
+      <td><input class="input" type="text" value="${escapeHtml(item.bssid)}"></td>
       <td><button class="button is-danger" onclick="removeAreaRow(this)">削除</button></td>
     `;
     body.appendChild(row);
@@ -729,7 +942,7 @@ document.addEventListener('DOMContentLoaded', () => {
   loadApPositionsTable();
   loadApPresetList();
   loadEntryManagement();
-  loadDeviceInstructionBoard();
+  initTunnelMapInteraction();
 
   setInterval(() => {
     if (isEditing) return;
@@ -738,7 +951,6 @@ document.addEventListener('DOMContentLoaded', () => {
     loadUserTable();
     loadEntryManagement();
     loadTunnelMap();
-    loadDeviceInstructionBoard();
   }, 5000);
 });
 
@@ -762,15 +974,31 @@ function initWifiMapRealtime() {
     .subscribe();
 }
 
-function loadTunnelMap() {
-  fetch('/api/wifi_map')
-    .then(r => r.json())
-    .then(data => {
-      lastWifiMapData = data;
-      renderTunnelMap(data);
-      if ((data.workers || []).some(w => w.report)) startReportGlowLoop();
-    })
-    .catch(e => console.error('wifi_map取得エラー:', e));
+async function loadTunnelMap() {
+  try {
+    const [mapRes, instrRes] = await Promise.all([
+      fetch('/api/wifi_map'),
+      fetch('/api/device_instructions')
+    ]);
+    if (!mapRes.ok) {
+      console.error('loadTunnelMap: APIエラー', mapRes.status);
+      return;
+    }
+    const data = await mapRes.json();
+    if (instrRes.ok) {
+      const instructions = await instrRes.json();
+      if (Array.isArray(instructions)) {
+        deviceInstructionMap = {};
+        instructions.forEach(i => { deviceInstructionMap[i.device_id] = i.instruction; });
+      }
+    }
+    lastWifiMapData = data;
+    renderTunnelMap(data);
+    updateFireStatus();
+    if ((data.workers || []).some(w => w.report)) startReportGlowLoop();
+  } catch (e) {
+    console.error('wifi_map取得エラー:', e);
+  }
 }
 
 // 通報中（report: true）のデバイスがいる間だけ、赤い光を明滅させ続けるループ
@@ -794,29 +1022,30 @@ function renderTunnelMap(data) {
   if (!canvas) return;
 
   const W = canvas.getBoundingClientRect().width || canvas.parentElement.clientWidth || 600;
-  const H = 200;
+  const H = 260;
   canvas.width = W;
   canvas.height = H;
 
   const ctx = canvas.getContext('2d');
   const { workers = [], ap_count = 6, ap_labels = [], area_order = [] } = data;
 
-  const PAD_X = 40;
-  const PAD_TOP = 28;
-  const PAD_BOT = 28;
+  const PAD_X = 44;
+  const PAD_TOP = 36;
+  const PAD_BOT = 36;
   const tW = W - PAD_X * 2;
   const tH = H - PAD_TOP - PAD_BOT;
   const tX = PAD_X;
   const tY = PAD_TOP;
 
   const C_DARK = 'rgba(25, 76, 34, 0.7)';
+  const C_TEXT = '#194c22';
   const C_FILL = 'rgba(66, 133, 123, 0.25)';
   const C_GREEN = '#2d9610';
   const C_RED = '#ff4b2b';
   const C_BLUE = '#207ce5';
   const C_DIV = 'rgba(25, 76, 34, 0.35)';
-  const FONT = "12px 'DotGothic16', sans-serif";
-  const FONT_SM = "10px 'DotGothic16', sans-serif";
+  const FONT = "16px 'DotGothic16', sans-serif";
+  const FONT_SM = "12px 'DotGothic16', sans-serif";
 
   ctx.clearRect(0, 0, W, H);
 
@@ -827,34 +1056,34 @@ function renderTunnelMap(data) {
   ctx.lineWidth = 3;
   ctx.strokeRect(tX, tY, tW, tH);
 
-  // エリア区切り
-  const n = area_order.length;
-  if (n > 0) {
-    ctx.font = FONT;
-    for (let i = 0; i <= n; i++) {
-      const x = tX + tW * i / n;
-      if (i > 0 && i < n) {
-        ctx.strokeStyle = C_DIV;
-        ctx.lineWidth = 1;
-        ctx.setLineDash([4, 4]);
-        ctx.beginPath();
-        ctx.moveTo(x, tY);
-        ctx.lineTo(x, tY + tH);
-        ctx.stroke();
-        ctx.setLineDash([]);
-      }
-      if (i < n) {
-        const labelX = tX + tW * (i + 0.5) / n;
-        ctx.fillStyle = C_DARK;
-        ctx.textAlign = 'center';
-        ctx.fillText(area_order[i], labelX, tY - 6);
-      }
+  // エリア区間（サーバーの area_layout。古いサーバー応答なら等分）
+  const layout = Array.isArray(data.area_layout) && data.area_layout.length
+    ? data.area_layout
+    : area_order.map((a, i) => ({ area_id: a, start: i / area_order.length, end: (i + 1) / area_order.length }));
+  ctx.font = FONT;
+  layout.forEach((seg, i) => {
+    if (i > 0) {
+      const x = tX + tW * seg.start;
+      ctx.strokeStyle = C_DIV;
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath();
+      ctx.moveTo(x, tY);
+      ctx.lineTo(x, tY + tH);
+      ctx.stroke();
+      ctx.setLineDash([]);
     }
-  }
+    ctx.fillStyle = C_TEXT;
+    ctx.textAlign = 'center';
+    ctx.fillText(seg.area_id, tX + tW * (seg.start + seg.end) / 2, tY - 12);
+  });
 
-  // APマーカー（トンネル下端）
-  for (let i = 0; i < ap_count; i++) {
-    const x = tX + tW * i / (ap_count - 1);
+  // APマーカー（トンネル下端）。実距離の位置に置く（サーバーの ap_markers。古い応答なら等間隔）
+  const markers = Array.isArray(data.ap_markers) && data.ap_markers.length
+    ? data.ap_markers
+    : Array.from({ length: ap_count }, (_, i) => ({ label: ap_labels[i] ?? String(i), ratio: i / (ap_count - 1) }));
+  markers.forEach(m => {
+    const x = tX + tW * m.ratio;
     const y = tY + tH;
     ctx.fillStyle = C_BLUE;
     ctx.strokeStyle = C_DARK;
@@ -863,14 +1092,25 @@ function renderTunnelMap(data) {
     ctx.arc(x, y, 5, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
-    ctx.fillStyle = C_DARK;
+    ctx.fillStyle = C_TEXT;
     ctx.font = FONT_SM;
     ctx.textAlign = 'center';
-    ctx.fillText(ap_labels[i] !== undefined ? `AP${ap_labels[i]}` : `AP${i}`, x, y + 16);
+    ctx.fillText(`AP${m.label}`, x, y + 22);
+  });
+
+  // 火災位置（作業者より下に描く）と、指定モード中のカーソル位置のプレビュー
+  tunnelGeom = { tX, tW, tY, tH };
+  const fire = data.fire;
+  if (fire && fire.active && fire.ratio !== null && fire.ratio !== undefined) {
+    drawFireMarker(ctx, tX + tW * fire.ratio, tY, tH, `火災 約${Number(fire.distance_m).toFixed(1)}m`, false);
+  }
+  if (fireMode && fireHoverRatio !== null) {
+    const m = ratioToDistanceM(fireHoverRatio);
+    drawFireMarker(ctx, tX + tW * fireHoverRatio, tY, tH, m === null ? 'ここ' : `ここ 約${m.toFixed(1)}m`, true);
   }
 
   // 作業者の円（衝突を避けてY方向にずらす）
-  const R = 18;
+  const R = 20;
   const centerY = tY + tH / 2;
   const wList = workers.map(w => ({
     ...w,
@@ -898,6 +1138,8 @@ function renderTunnelMap(data) {
 
   const now = performance.now();
   wList.forEach(w => {
+    // 60秒以上レポートが来ていないデバイスは「最後に見えた位置」なので薄く描く
+    ctx.globalAlpha = w.online === false ? 0.4 : 1;
     if (w.report) {
       // パルスするグロー（発光）を丸の外側に描画
       const pulse = (Math.sin(now / 250) + 1) / 2; // 0〜1
@@ -917,27 +1159,71 @@ function renderTunnelMap(data) {
     ctx.fillStyle = w.report ? C_RED : C_GREEN;
     ctx.strokeStyle = C_DARK;
     ctx.lineWidth = 2;
+    // approx: AP位置設定に無いAPで、エリア割当の一致だけで置いたもの（エリアの中央に点線で表示）
+    if (w.approx) ctx.setLineDash([4, 3]);
     ctx.beginPath();
     ctx.arc(w.cx, w.cy, R, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
+    ctx.setLineDash([]);
     ctx.shadowBlur = 0;
-    const label = (w.username || w.device_id || '?').slice(0, 6);
     ctx.fillStyle = '#fff';
     ctx.font = FONT_SM;
+    // 円の中に収まる文字数まで切り詰める（全名はクリックしたポップアップで見られる）
+    let label = (w.username || w.device_id || '?').slice(0, 6);
+    while (label.length > 1 && ctx.measureText(label).width > R * 2 - 6) label = label.slice(0, -1);
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(label, w.cx, w.cy);
     ctx.textBaseline = 'alphabetic';
+
+    // 「なし」以外の指示が出ているデバイスには右上に指示バッジ
+    const instruction = deviceInstructionMap[w.device_id] || 'none';
+    if (instruction !== 'none') {
+      const text = deviceInstructionLabel(instruction);
+      ctx.font = FONT_SM;
+      const bw = ctx.measureText(text).width + 8;
+      const bx = w.cx + R * 0.4;
+      const by = w.cy - R - 6;
+      ctx.fillStyle = C_BLUE;
+      ctx.fillRect(bx, by, bw, 18);
+      ctx.strokeStyle = C_DARK;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(bx, by, bw, 18);
+      ctx.fillStyle = '#fff';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(text, bx + 4, by + 9);
+      ctx.textBaseline = 'alphabetic';
+    }
+
+    // アイコンを強調（ポップアップ対象）
+    if (w.device_id === popupDeviceId) {
+      ctx.strokeStyle = C_BLUE;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(w.cx, w.cy, R + 4, 0, Math.PI * 2);
+      ctx.stroke();
+    }
   });
+  ctx.globalAlpha = 1;
+
+  tunnelMapHitboxes = wList.map(w => ({
+    device_id: w.device_id,
+    username: w.username,
+    fire_message: w.fire_message,
+    cx: w.cx,
+    cy: w.cy,
+    r: R,
+  }));
 
   // 外/奥ラベル
-  ctx.fillStyle = C_DARK;
+  ctx.fillStyle = C_TEXT;
   ctx.font = FONT;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText('外', tX - 20, tY + tH / 2);
-  ctx.fillText('奥', tX + tW + 20, tY + tH / 2);
+  ctx.fillText('外', tX - 22, tY + tH / 2);
+  ctx.fillText('奥', tX + tW + 22, tY + tH / 2);
   ctx.textBaseline = 'alphabetic';
 
   if (workers.length === 0) {
@@ -977,7 +1263,7 @@ async function loadApPositionsTable() {
       const row = document.createElement('tr');
       row.dataset.originalMac = item.mac || '';
       row.innerHTML = `
-        <td><input class="input" type="text" value="${item.mac}"></td>
+        <td><input class="input" type="text" value="${escapeHtml(item.mac)}"></td>
         <td><select class="select ap-position-select">${apPositionOptions(item.position)}</select></td>
         <td><button class="button is-danger" onclick="removeApPositionRow(this)">削除</button></td>
       `;
@@ -1064,7 +1350,7 @@ async function loadApPresetList() {
 
     const current = select.value;
     select.innerHTML = '<option value="">-- プリセットを選択 --</option>' +
-      presets.map(p => `<option value="${p.name}">${p.name}</option>`).join('');
+      presets.map(p => `<option value="${escapeHtml(p.name)}">${escapeHtml(p.name)}</option>`).join('');
     if (presets.some(p => p.name === current)) select.value = current;
   } catch (e) {
     console.error('loadApPresetList error:', e);
@@ -1098,7 +1384,7 @@ async function loadApPreset() {
       const row = document.createElement('tr');
       row.dataset.originalMac = item.mac || '';
       row.innerHTML = `
-        <td><input class="input" type="text" value="${item.mac}"></td>
+        <td><input class="input" type="text" value="${escapeHtml(item.mac)}"></td>
         <td><select class="select ap-position-select">${apPositionOptions(item.position)}</select></td>
         <td><button class="button is-danger" onclick="removeApPositionRow(this)">削除</button></td>
       `;
@@ -1228,7 +1514,7 @@ function renderEntryCurrentTable(statusList) {
     const label = item.username || item.device_id || '?';
     const isIn = item.status === 'in';
     row.innerHTML = `
-      <td>${label}</td>
+      <td>${escapeHtml(label)}</td>
       <td><span class="entry-badge ${isIn ? 'entry-in' : 'entry-out'}">${isIn ? '入場中' : '退場'}</span></td>
       <td>${formatEntryTime(item.entry_time)}</td>
       <td>${formatEntryTime(item.exit_time)}</td>
@@ -1252,7 +1538,7 @@ function renderEntryLogTable(logList) {
     const label = item.username || item.device_id || '?';
     const isEnter = item.event_type === 'enter';
     row.innerHTML = `
-      <td>${label}</td>
+      <td>${escapeHtml(label)}</td>
       <td><span class="entry-badge ${isEnter ? 'entry-in' : 'entry-out'}">${isEnter ? '入場' : '退場'}</span></td>
       <td>${formatEntryTime(item.event_time)}</td>
     `;

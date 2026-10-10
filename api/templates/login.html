@@ -8,73 +8,171 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
     <style>
         .login-container {
-            min-height: 100vh;
+            min-height: calc(100vh - 48px);
             display: flex;
             align-items: center;
             justify-content: center;
         }
         .login-card {
-            max-width: 400px;
-            width: 90%;
+            max-width: 420px;
+            width: 100%;
             text-align: center;
+            margin-bottom: 0;
         }
         .login-logo {
-            margin-bottom: 2rem;
+            margin-bottom: 1.5rem;
             animation: bounce 2s infinite ease-in-out;
         }
         @keyframes bounce {
             0%, 100% { transform: translateY(0); }
             50% { transform: translateY(-10px); }
         }
+        @media (prefers-reduced-motion: reduce) {
+            .login-logo { animation: none; }
+        }
+        .login-card .subtitle {
+            margin: 0 auto 8px;
+            display: inline-block;
+        }
+        .login-lead {
+            font-size: 14px;
+            color: var(--ink-sub);
+            margin-bottom: 20px;
+        }
+        .login-card .field {
+            text-align: left;
+        }
+        .login-card .label {
+            font-size: 14px;
+            color: var(--ink);
+            margin-bottom: 4px;
+        }
+        /* style.css の text/password 入力と同じドット調に揃える */
+        .login-card input[type="email"] {
+            font-family: 'DotGothic16', sans-serif;
+            background-color: rgba(255, 255, 255, 0.4) !important;
+            border: 3px solid var(--pixel-dark-alpha) !important;
+            color: var(--pixel-dark-solid) !important;
+            border-radius: 0 !important;
+            padding: 8px 12px !important;
+            box-shadow: inset 3px 3px 0px rgba(0, 0, 0, 0.05);
+            height: auto !important;
+            min-height: 2.5em;
+        }
+        .login-card input {
+            font-size: 16px;
+            text-align: left;
+            letter-spacing: 1px;
+        }
+        .login-card input:focus {
+            outline: 3px solid var(--pixel-blue);
+            outline-offset: 2px;
+        }
+        .login-error {
+            display: none;
+            margin-top: 16px;
+            padding: 8px 10px;
+            font-size: 14px;
+            text-align: left;
+            color: #fff;
+            background: var(--state-fire);
+            border: 2px solid #7f1414;
+        }
+        .login-error.is-visible {
+            display: block;
+        }
+        .login-toggle {
+            font-family: 'DotGothic16', sans-serif;
+            font-size: 14px;
+            color: var(--pixel-blue);
+            background: none;
+            border: none;
+            padding: 4px;
+            text-decoration: underline;
+            cursor: pointer;
+        }
+        .login-version {
+            font-size: 12px;
+            color: var(--ink-sub);
+        }
     </style>
 </head>
 <body>
     <div class="login-container">
-        <div class="box login-card">
+        <form class="box login-card" id="loginForm" novalidate>
             <div class="login-logo">
                 <img src="{{url_for('static', filename='banner.png')}}" class="site-icon" alt="まもっち">
             </div>
-            
-            <h1 class="subtitle" id="modeTitle" style="margin-top: 0; margin-left: 0;">ADMIN ACCESS</h1>
+
+            <h1 class="subtitle" id="modeTitle">ADMIN ACCESS</h1>
+            <p class="login-lead" id="modeLead">管理者アカウントでログインしてください</p>
 
             <div class="field">
+                <label class="label" for="loginEmail">メールアドレス</label>
                 <div class="control">
-                    <input class="input" type="email" placeholder="OPERATOR EMAIL">
+                    <input class="input" id="loginEmail" type="email" autocomplete="username" placeholder="OPERATOR EMAIL" required>
                 </div>
             </div>
 
             <div class="field">
+                <label class="label" for="loginPassword">パスワード</label>
                 <div class="control">
-                    <input class="input" type="password" placeholder="PASSWORD">
+                    <input class="input" id="loginPassword" type="password" autocomplete="current-password" placeholder="PASSWORD" required>
                 </div>
             </div>
 
-            <button class="button is-primary is-fullwidth mt-5" id="actionBtn">
+            <p class="login-error" id="loginError" role="alert"></p>
+
+            <button type="submit" class="button is-primary is-fullwidth mt-5" id="actionBtn">
                 SYSTEM START
             </button>
 
-            <p class="mt-3">
-                <a id="toggleLink" style="font-size:0.8rem; opacity:0.7;">アカウントを作成する</a>
+            <p class="mt-4">
+                <button type="button" class="login-toggle" id="toggleLink">アカウントを作成する</button>
             </p>
 
-            <p class="mt-2 is-size-7" style="opacity: 0.6;">© 2024 MAMOTCHI SYSTEM Ver 1.0.2</p>
-        </div>
+            <p class="mt-3 login-version">© 2024 MAMOTCHI SYSTEM Ver 1.0.2</p>
+        </form>
     </div>
 
 <script>
     let mode = 'login';
 
+    const emailEl = document.getElementById('loginEmail');
+    const passwordEl = document.getElementById('loginPassword');
+    const errorEl = document.getElementById('loginError');
+    const btn = document.getElementById('actionBtn');
+
+    function showError(message) {
+        errorEl.textContent = message;
+        errorEl.classList.toggle('is-visible', !!message);
+    }
+
     document.getElementById('toggleLink').addEventListener('click', () => {
         mode = mode === 'login' ? 'signup' : 'login';
-        document.getElementById('modeTitle').textContent = mode === 'login' ? 'ADMIN ACCESS' : 'NEW OPERATOR';
-        document.getElementById('actionBtn').textContent = mode === 'login' ? 'SYSTEM START' : 'REGISTER';
-        document.getElementById('toggleLink').textContent = mode === 'login' ? 'アカウントを作成する' : 'ログインに戻る';
+        const login = mode === 'login';
+        document.getElementById('modeTitle').textContent = login ? 'ADMIN ACCESS' : 'NEW OPERATOR';
+        document.getElementById('modeLead').textContent = login
+            ? '管理者アカウントでログインしてください'
+            : '新しい管理者アカウントを作成します';
+        btn.textContent = login ? 'SYSTEM START' : 'REGISTER';
+        document.getElementById('toggleLink').textContent = login ? 'アカウントを作成する' : 'ログインに戻る';
+        passwordEl.autocomplete = login ? 'current-password' : 'new-password';
+        showError('');
     });
 
-    document.getElementById('actionBtn').addEventListener('click', async () => {
-        const email = document.querySelector('input[type="email"]').value.trim();
-        const password = document.querySelector('input[type="password"]').value.trim();
-        const btn = document.getElementById('actionBtn');
+    // Enter キーでも送信できるように form の submit で処理する
+    document.getElementById('loginForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const email = emailEl.value.trim();
+        const password = passwordEl.value.trim();
+
+        if (!email || !password) {
+            showError('メールアドレスとパスワードを入力してください');
+            (email ? passwordEl : emailEl).focus();
+            return;
+        }
+        showError('');
 
         btn.classList.add('is-loading');
         btn.disabled = true;
@@ -89,10 +187,10 @@
             if (data.status === "success") {
                 window.location.href = data.redirect;
             } else {
-                alert(data.message || 'エラーが発生しました');
+                showError(data.message || 'エラーが発生しました');
             }
         } catch {
-            alert('通信エラーが発生しました');
+            showError('通信エラーが発生しました。ネットワークを確認してください');
         } finally {
             btn.classList.remove('is-loading');
             btn.disabled = false;

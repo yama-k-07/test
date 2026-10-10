@@ -337,26 +337,6 @@ input[type="checkbox"]:checked:hover {
   /* チェック中のホバー色（明るい赤） */
 }
 
-/* チェックが入った時の状態：背景を緑にし、ドットの「レ点」を出す */
-input[type="checkbox"]:checked {
-  background-color: var(--pixel-green) !important;
-  border-color: var(--pixel-dark-solid) !important;
-}
-
-/* チェックマークのデザイン（擬似要素で描画） */
-input[type="checkbox"]:checked::after {
-  content: "";
-  position: absolute;
-  /* カクカクしたレ点を作るための設定 */
-  left: 5px;
-  top: 1px;
-  width: 8px;
-  height: 14px;
-  border: solid white;
-  border-width: 0 4px 4px 0;
-  /* 太めの線でドット感を出す */
-  transform: rotate(45deg);
-}
 
 /* ラベルとの位置調整 */
 .checkbox {
@@ -472,8 +452,48 @@ tr.is-alerting td {
 #tunnelMap {
   display: block;
   width: 100%;
-  height: 200px;
+  /* admin.js renderTunnelMap の H と同じ値にする（クリック判定がずれるため） */
+  height: 260px;
   image-rendering: pixelated;
+}
+
+
+.tunnel-map-wrap {
+  position: relative;
+}
+
+/* 作業者アイコンをクリックした時の指示ポップアップ */
+.worker-popup {
+  position: absolute;
+  z-index: 10;
+  min-width: 200px;
+  background: rgba(255, 255, 255, 0.95);
+  border: 3px solid var(--pixel-dark-alpha);
+  box-shadow: 4px 4px 0px var(--pixel-dark-alpha);
+  padding: 8px 10px;
+}
+
+.worker-popup[hidden] {
+  display: none;
+}
+
+.worker-popup-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.worker-popup-close {
+  margin-left: auto;
+}
+
+.worker-popup-current {
+  font-size: 12px;
+  margin: 6px 0;
+}
+
+.worker-popup-buttons {
+  margin-bottom: 0 !important;
 }
 
 /* 入場管理 */
@@ -521,4 +541,394 @@ tr.is-alerting td {
   color: #888;
   border-color: #bbb;
   background: rgba(0, 0, 0, 0.04);
+}
+
+/* =====================================================================
+   見やすさ調整（2026-10-10）
+   方針: 状態を上に / 赤は火災・通報だけ / 色だけでなく文字でも示す /
+         文字コントラスト 4.5:1 以上 / 本文 16px（DotGothic16 の基準サイズ）
+   ドット調の枠・影・フォントとロゴはそのまま。
+   ===================================================================== */
+
+:root {
+  /* 文字用の濃い色（白背景・白文字でコントラスト 4.5:1 以上になるもの） */
+  --ink: #194c22;
+  --ink-sub: #3d5a45;
+  --state-ok: #1f6e0a;
+  --state-off: #5f6b66;
+  --state-wait: #8a5300;
+  --state-evac: #1a5fb4;
+  --state-warn: #a34700;
+  --state-fire: #c62828;
+}
+
+body {
+  font-size: 16px;
+  padding: 24px;
+}
+
+@media (max-width: 768px) {
+  body {
+    padding: 8px;
+  }
+
+  main.section {
+    padding: 16px 4px;
+  }
+
+  .box {
+    padding: 20px 14px;
+  }
+}
+
+.header {
+  margin-bottom: 32px;
+}
+
+/* セクション見出し: 折り返さない */
+.subtitle {
+  white-space: nowrap;
+  font-size: 1.25rem;
+}
+
+.section-hint {
+  font-size: 14px;
+  color: var(--ink-sub);
+  margin: 0 0 12px;
+}
+
+.box .section-hint:last-child {
+  margin: 12px 0 0;
+}
+
+/* 監視と設定の区切り */
+.settings-heading {
+  font-family: 'DotGothic16', sans-serif;
+  font-size: 1.5rem;
+  color: var(--ink);
+  margin: 48px 0 24px;
+  padding-bottom: 6px;
+  border-bottom: 4px solid var(--pixel-dark-alpha);
+}
+
+/* ---------- トンネルマップ ---------- */
+.map-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  margin-top: 12px;
+  font-size: 14px;
+  color: var(--ink);
+  list-style: none;
+}
+
+.map-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.legend-dot {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid var(--pixel-dark-alpha);
+  background: var(--pixel-green);
+}
+
+.legend-report {
+  background: var(--pixel-red);
+  box-shadow: 0 0 6px 2px rgba(255, 75, 43, 0.6);
+}
+
+.legend-offline {
+  opacity: 0.4;
+}
+
+.legend-approx {
+  border: 2px dashed var(--ink);
+}
+
+.legend-tag {
+  font-size: 12px;
+  color: #fff;
+  background: var(--pixel-blue);
+  border: 1px solid var(--pixel-dark-alpha);
+  padding: 0 4px;
+}
+
+.worker-popup {
+  min-width: 230px;
+  font-size: 15px;
+  color: var(--ink);
+}
+
+.worker-popup-current {
+  font-size: 14px;
+}
+
+/* ---------- エリアカード ---------- */
+.direction-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 14px;
+  color: var(--ink-sub);
+  margin-bottom: 8px;
+}
+
+.area-board {
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+}
+
+/* 外枠は透明にして、中の .box をカードとして見せる（下に出ていた緑の帯を消す） */
+.area-card {
+  background: transparent;
+  border: none;
+  color: var(--ink);
+  font-size: 16px;
+}
+
+@media (max-width: 1200px) {
+  .area-card {
+    flex: 0 0 220px;
+    box-shadow: none;
+  }
+}
+
+.area-card .areacard {
+  height: 100%;
+  margin-bottom: 0;
+  padding: 0 0 16px;
+  text-align: left;
+  border-top-width: 10px;
+  border-top-color: var(--pixel-dark-alpha);
+}
+
+.area-card h2 {
+  font-size: 20px;
+  padding: 8px 12px;
+  margin-bottom: 12px;
+}
+
+.area-card .field,
+.area-card .area-entries {
+  padding: 0 14px;
+}
+
+.area-card .label,
+.area-card label {
+  font-size: 14px;
+  color: var(--ink);
+}
+
+.area-card select.instruction {
+  width: 100%;
+  font-size: 16px;
+}
+
+/* 指示が出ているカードは上辺と見出しの色を変える（選択中の文字でも分かる） */
+.areacard[data-instruction="waiting"] {
+  border-top-color: var(--state-wait);
+}
+
+.areacard[data-instruction="waiting"] h2 {
+  background: var(--state-wait);
+}
+
+.areacard[data-instruction="evacuate_exit"],
+.areacard[data-instruction="evacuate_upwind"] {
+  border-top-color: var(--state-evac);
+}
+
+.areacard[data-instruction="evacuate_exit"] h2,
+.areacard[data-instruction="evacuate_upwind"] h2 {
+  background: var(--state-evac);
+}
+
+.areacard[data-instruction="alert"] {
+  border-top-color: var(--state-warn);
+}
+
+.areacard[data-instruction="alert"] h2 {
+  background: var(--state-warn);
+}
+
+/* 火災: 赤の点滅（既存の is-alerting）に加えて文字の帯を出す */
+.area-fire-banner {
+  display: none;
+  margin: -4px 14px 12px;
+  padding: 4px 8px;
+  font-size: 15px;
+  font-weight: bold;
+  color: #fff;
+  text-align: center;
+  background: var(--state-fire);
+  border: 2px solid #7f1414;
+}
+
+.areacard.is-alerting .area-fire-banner {
+  display: block;
+}
+
+.areacard.is-alerting h2 {
+  background: var(--state-fire);
+}
+
+/* 点滅中も中の文字が読めるように、カード本体は白っぽく保つ */
+.areacard.is-alerting {
+  background: rgba(255, 255, 255, 0.85);
+  border-color: var(--state-fire) !important;
+  box-shadow: 0 0 0 4px rgba(255, 75, 43, 0.35), 8px 8px 0 rgba(198, 40, 40, 0.25);
+  animation: pulse-fire-border 1.6s infinite ease-in-out;
+}
+
+@keyframes pulse-fire-border {
+  0%, 100% { box-shadow: 0 0 0 4px rgba(255, 75, 43, 0.25), 8px 8px 0 rgba(198, 40, 40, 0.2); }
+  50% { box-shadow: 0 0 0 8px rgba(255, 75, 43, 0.55), 8px 8px 0 rgba(198, 40, 40, 0.3); }
+}
+
+/* 火災チェックは赤（緑だと「正常」に見えるため） */
+input[type="checkbox"]:checked {
+  background-color: var(--state-fire) !important;
+  border-color: #7f1414 !important;
+}
+
+.area-entries {
+  margin-top: 4px;
+}
+
+.area-entries-title {
+  font-size: 14px;
+  font-weight: bold;
+  color: var(--ink);
+  margin-bottom: 4px !important;
+}
+
+.area-entries-count {
+  display: inline-block;
+  min-width: 1.6em;
+  padding: 0 6px;
+  margin-left: 4px;
+  text-align: center;
+  color: #fff;
+  background: var(--pixel-dark-solid);
+}
+
+.content ul.entry-list li {
+  font-size: 16px;
+  color: var(--ink);
+  padding: 2px 0;
+  border-bottom: 1px dashed rgba(25, 76, 34, 0.25);
+}
+
+.content ul.entry-list li.entry-list-empty {
+  color: var(--state-off);
+  border-bottom: none;
+}
+
+/* ---------- 入場管理・表 ---------- */
+.table {
+  font-size: 15px;
+}
+
+.table thead th {
+  font-size: 14px;
+  white-space: nowrap;
+}
+
+.table td,
+.table th {
+  vertical-align: middle;
+}
+
+.entry-section-label {
+  font-size: 15px;
+}
+
+.entry-log-scroll {
+  max-height: 280px;
+}
+
+.entry-badge {
+  font-size: 13px;
+  padding: 2px 10px;
+  white-space: nowrap;
+}
+
+.entry-badge.entry-in {
+  color: var(--state-ok);
+  border-color: var(--state-ok);
+}
+
+.entry-badge.entry-out {
+  color: var(--state-off);
+  border-color: #9aa5a0;
+}
+
+/* ---------- 設定 ---------- */
+.settings-container {
+  align-items: flex-start;
+}
+
+.settings-container .subtitle {
+  font-size: 1.1rem;
+}
+
+.settings-container .input,
+.settings-container select {
+  font-size: 15px;
+}
+
+/* ---------- 火災位置 ---------- */
+.fire-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 12px;
+  margin-bottom: 12px;
+}
+
+.fire-controls .button.is-danger {
+  background-color: var(--state-fire);
+  color: #fff;
+}
+
+.fire-controls .button.is-danger.is-outlined {
+  background-color: #fff;
+  color: var(--state-fire);
+}
+
+.fire-status {
+  font-size: 15px;
+  color: var(--ink);
+}
+
+.fire-status.is-active {
+  font-weight: bold;
+  color: #fff;
+  background: var(--state-fire);
+  border: 2px solid #7f1414;
+  padding: 2px 10px;
+}
+
+#tunnelMap.is-fire-mode {
+  outline: 4px dashed var(--state-fire);
+  outline-offset: 2px;
+}
+
+.legend-fire {
+  display: inline-block;
+  width: 6px;
+  height: 18px;
+  background: var(--state-fire);
+  box-shadow: 0 0 0 5px rgba(198, 40, 40, 0.18);
+  margin: 0 5px;
+}
+
+.worker-popup-fire {
+  font-size: 14px;
+  font-weight: bold;
+  color: var(--state-fire);
+  margin: 0 0 8px;
 }
