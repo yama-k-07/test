@@ -612,8 +612,8 @@ async function loadUserTable() {
     row.dataset.originalUser = item.username || '';
     row.dataset.originalDeviceId = item.device_id || '';
     row.innerHTML = `
-      <td><input class="input" type="text" value="${usernameVal}"></td>
-      <td><input class="input" type="text" value="${device_idVal}"></td>
+      <td><input class="input" type="text" value="${escapeHtml(usernameVal)}"></td>
+      <td><input class="input" type="text" value="${escapeHtml(device_idVal)}"></td>
       <td><button class="button is-danger" onclick="removeRow(this)">削除</button></td>
     `;
     // row.innerHTML = `
@@ -631,8 +631,8 @@ async function loadUserTable() {
     const u = unsaved[i];
     const row = document.createElement('tr');
     row.innerHTML = `
-      <td><input class="input" type="text" value="${u.username}"></td>
-      <td><input class="input" type="text" value="${u.device_id}"></td>
+      <td><input class="input" type="text" value="${escapeHtml(u.username)}"></td>
+      <td><input class="input" type="text" value="${escapeHtml(u.device_id)}"></td>
       <td><button class="button is-danger" onclick="removeRow(this)">削除</button></td>
     `;
     body.appendChild(row);
@@ -726,7 +726,7 @@ async function loadAreaTable() {
     const row = document.createElement('tr');
     const use = current[item.area_id] || { instruction: item.instruction, fire: item.fire };
     row.innerHTML = `
-      <td><input class="input" type="text" value="${item.area_id}" disabled></td>
+      <td><input class="input" type="text" value="${escapeHtml(item.area_id)}" disabled></td>
       <td>
         <select class="select">
           <option value="none" ${use.instruction === 'none' ? 'selected' : ''}>none</option>
@@ -794,9 +794,9 @@ async function loadEntryTable() {
     entryList.forEach(item => {
       const row = document.createElement('tr');
       row.innerHTML = `
-        <td>${item.device_id}</td>
-        <td>${item.area_id}</td>
-        <td>${item.username || ''}</td>
+        <td>${escapeHtml(item.device_id)}</td>
+        <td>${escapeHtml(item.area_id)}</td>
+        <td>${escapeHtml(item.username || '')}</td>
       `;
       body.appendChild(row);
     });
@@ -836,8 +836,8 @@ async function loadAreaMapTable() {
     const row = document.createElement('tr');
     row.dataset.originalArea = item.area_id || '';
     row.innerHTML = `
-      <td><input class="input" type="text" value="${item.area_id}"></td>
-      <td><input class="input" type="text" value="${item.bssid}"></td>
+      <td><input class="input" type="text" value="${escapeHtml(item.area_id)}"></td>
+      <td><input class="input" type="text" value="${escapeHtml(item.bssid)}"></td>
       <td><button class="button is-danger" onclick="removeAreaRow(this)">削除</button></td>
     `;
     body.appendChild(row);
@@ -1263,7 +1263,7 @@ async function loadApPositionsTable() {
       const row = document.createElement('tr');
       row.dataset.originalMac = item.mac || '';
       row.innerHTML = `
-        <td><input class="input" type="text" value="${item.mac}"></td>
+        <td><input class="input" type="text" value="${escapeHtml(item.mac)}"></td>
         <td><select class="select ap-position-select">${apPositionOptions(item.position)}</select></td>
         <td><button class="button is-danger" onclick="removeApPositionRow(this)">削除</button></td>
       `;
@@ -1350,7 +1350,7 @@ async function loadApPresetList() {
 
     const current = select.value;
     select.innerHTML = '<option value="">-- プリセットを選択 --</option>' +
-      presets.map(p => `<option value="${p.name}">${p.name}</option>`).join('');
+      presets.map(p => `<option value="${escapeHtml(p.name)}">${escapeHtml(p.name)}</option>`).join('');
     if (presets.some(p => p.name === current)) select.value = current;
   } catch (e) {
     console.error('loadApPresetList error:', e);
@@ -1384,7 +1384,7 @@ async function loadApPreset() {
       const row = document.createElement('tr');
       row.dataset.originalMac = item.mac || '';
       row.innerHTML = `
-        <td><input class="input" type="text" value="${item.mac}"></td>
+        <td><input class="input" type="text" value="${escapeHtml(item.mac)}"></td>
         <td><select class="select ap-position-select">${apPositionOptions(item.position)}</select></td>
         <td><button class="button is-danger" onclick="removeApPositionRow(this)">削除</button></td>
       `;
@@ -1514,7 +1514,7 @@ function renderEntryCurrentTable(statusList) {
     const label = item.username || item.device_id || '?';
     const isIn = item.status === 'in';
     row.innerHTML = `
-      <td>${label}</td>
+      <td>${escapeHtml(label)}</td>
       <td><span class="entry-badge ${isIn ? 'entry-in' : 'entry-out'}">${isIn ? '入場中' : '退場'}</span></td>
       <td>${formatEntryTime(item.entry_time)}</td>
       <td>${formatEntryTime(item.exit_time)}</td>
@@ -1538,7 +1538,7 @@ function renderEntryLogTable(logList) {
     const label = item.username || item.device_id || '?';
     const isEnter = item.event_type === 'enter';
     row.innerHTML = `
-      <td>${label}</td>
+      <td>${escapeHtml(label)}</td>
       <td><span class="entry-badge ${isEnter ? 'entry-in' : 'entry-out'}">${isEnter ? '入場' : '退場'}</span></td>
       <td>${formatEntryTime(item.event_time)}</td>
     `;

@@ -846,7 +846,9 @@ def handle_fire_location():
     try:
         supabase.table(TABLE_FIRE_LOCATION).upsert(payload).execute()
     except Exception as e:
-        return jsonify({'error': f'火災位置の保存に失敗しました（supabase/fire_location.sql は実行済みですか？）: {e}'}), 500
+        # 例外の詳細はサーバーログにだけ出す（画面には返さない）
+        print(f"Error saving fire_location: {e}")
+        return jsonify({'error': '火災位置の保存に失敗しました（supabase/fire_location.sql は実行済みですか？）'}), 500
 
     reports = load_wifi_reports()
     positions, _ = estimate_positions(reports, load_ap_positions(), load_area_order(), load_area_table())
