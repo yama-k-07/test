@@ -14,6 +14,7 @@ load_dotenv()
 
 sentry_sdk.init(
     dsn=os.environ.get("SENTRY_DSN"),
+    debug=True,
     # To customize collected data (user info, request bodies, AI inputs/outputs),
     # see https://docs.sentry.io/platforms/python/data-management/data-collected/
     # data_collection={"user_info": False},
