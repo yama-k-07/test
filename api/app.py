@@ -1083,11 +1083,11 @@ def debug_wifi_map():
 
 
 # sentryテスト用エラー発生コード
-@app.route("/api/debug/sentry_test")
-def hello_world():
-    # 1/0  # raises an error
-    raise Exception("sentry test")
-    return "<p>Hello, World!</p>"
+@app.route("/api/debug/sentry-msg-test")
+def sentry_msg_test():
+    sentry_sdk.capture_message("Sentry manual message test at " + str(time.time()))
+    sentry_sdk.flush(timeout=2.0)
+    return "Message sent"
 
 
 if __name__ == '__main__':
