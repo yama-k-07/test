@@ -1079,5 +1079,13 @@ def debug_wifi_map():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
+# sentryテスト用エラー発生コード
+@app.route("/api/debug/sentry_test")
+def hello_world():
+    1/0  # raises an error
+    return "<p>Hello, World!</p>"
+
+
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=5000, debug=False)
