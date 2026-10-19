@@ -1085,7 +1085,8 @@ def debug_wifi_map():
 # sentryテスト用エラー発生コード
 @app.route("/api/debug/sentry_test")
 def hello_world():
-    1/0  # raises an error
+    # 1/0  # raises an error
+    raise Exception("sentry test")
     return "<p>Hello, World!</p>"
 
 
