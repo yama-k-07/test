@@ -1,6 +1,14 @@
 let isEditing = false;
 let isSorting = false;
 let lastWifiMapData = null;
+const NORMAL_LIVE_REFRESH_INTERVAL = 5000;
+const EMERGENCY_LIVE_REFRESH_INTERVAL = 500;
+let liveRefreshInterval = NORMAL_LIVE_REFRESH_INTERVAL;
+let liveRefreshTimer = null;
+let liveRefreshInProgress = false;
+let liveRefreshStarted = false;
+let fireLocationActive = false;
+let evacuationInstructionActive = false;
 
 // ちらつき防止用: 前回取得データとの差分がない場合は再描画をスキップする
 let lastAreaBoardSig = null;
@@ -48,6 +56,11 @@ async function loadAreaBoard() {
   if (sig === lastAreaBoardSig) return;
   lastAreaBoardSig = sig;
 
+  evacuationInstructionActive = areas.some(area =>
+    area.instruction === 'evacuate_exit' || area.instruction === 'evacuate_upwind'
+  );
+  updateLiveRefreshInterval();
+
   const board = document.getElementById("areaBoard");
   board.innerHTML = "";
 
@@ -84,6 +97,7 @@ async function saveAreaState(areaId, instruction, fire) {
     ])
   });
   isEditing = false;
+  await loadAreaBoard();
 }
 
 
@@ -944,15 +958,52 @@ document.addEventListener('DOMContentLoaded', () => {
   loadEntryManagement();
   initTunnelMapInteraction();
 
+  liveRefreshStarted = true;
+  scheduleLiveRefresh();
   setInterval(() => {
     if (isEditing) return;
-    loadAreaBoard();
     loadAreaMapTable();
     loadUserTable();
-    loadEntryManagement();
-    loadTunnelMap();
   }, 5000);
 });
+
+function updateLiveRefreshInterval() {
+  const nextInterval = fireLocationActive || evacuationInstructionActive
+    ? EMERGENCY_LIVE_REFRESH_INTERVAL
+    : NORMAL_LIVE_REFRESH_INTERVAL;
+  if (nextInterval === liveRefreshInterval) return;
+
+  liveRefreshInterval = nextInterval;
+  scheduleLiveRefresh();
+}
+
+function scheduleLiveRefresh() {
+  if (!liveRefreshStarted || liveRefreshInProgress) return;
+
+  clearTimeout(liveRefreshTimer);
+  liveRefreshTimer = setTimeout(runLiveRefresh, liveRefreshInterval);
+}
+
+async function runLiveRefresh() {
+  liveRefreshTimer = null;
+  if (isEditing) {
+    scheduleLiveRefresh();
+    return;
+  }
+
+  liveRefreshInProgress = true;
+  try {
+    await Promise.all([
+      loadAreaBoard(),
+      loadEntryManagement(),
+      loadTunnelMap()
+    ]);
+  } finally {
+    liveRefreshInProgress = false;
+    scheduleLiveRefresh();
+  }
+}
+
 
 window.addEventListener('resize', () => {
   if (lastWifiMapData) renderTunnelMap(lastWifiMapData);
@@ -985,6 +1036,10 @@ async function loadTunnelMap() {
       return;
     }
     const data = await mapRes.json();
+    if (data.fire && typeof data.fire.active === 'boolean') {
+      fireLocationActive = data.fire.active;
+      updateLiveRefreshInterval();
+    }
     if (instrRes.ok) {
       const instructions = await instrRes.json();
       if (Array.isArray(instructions)) {
@@ -1587,5 +1642,3 @@ document.addEventListener('change', function (e) {
 function refreshAlertStyles() {
   document.querySelectorAll('input[type="checkbox"]').forEach(updateAlertStyle);
 }
-
-

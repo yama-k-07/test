@@ -258,7 +258,9 @@
 
 ### 7.2 更新の仕組み
 - `DOMContentLoaded` で全セクションを1回ロード。
-- `setInterval` 5秒ごとに `loadAreaBoard, loadAreaMapTable, loadUserTable, loadEntryManagement, loadTunnelMap`（AP位置設定とプリセット一覧は初回のみ）。
+- 通常時はライブ表示（`loadAreaBoard`, `loadEntryManagement`, `loadTunnelMap`）を5秒ごとに更新し、設定テーブル（`loadAreaMapTable`, `loadUserTable`）も5秒ごとに更新する（AP位置設定とプリセット一覧は初回のみ）。
+- 火災位置が有効、またはエリア指示が `evacuate_exit` / `evacuate_upwind` の間は、ライブ表示を500msごとに更新する。設定テーブルは5秒ごとのまま。緊急状態は `/api/wifi_map` と `/api/area_status` の取得結果から判定する。
+- 500ms更新では `/api/wifi_map` と `/api/entry_management` も高頻度で呼ばれる。両APIはDB書き込みを伴うため、緊急状態が継続する間は呼び出し頻度が増加する。
 - Supabase Realtime: anon key で `latest_wifi_reports` の `postgres_changes` を購読し、変化したら `loadTunnelMap()`。
 - **ちらつき防止**: 各ロード関数は前回レスポンスの `JSON.stringify` を `last*Sig` に持ち、同じなら再描画しない。
 - **編集中ガード**: `input/select` に focus があると `isEditing=true` で定期更新を止める。ドラッグ中は `isSorting`。
