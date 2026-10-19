@@ -8,8 +8,16 @@ import json
 import os
 import re
 import time
+import sentry_sdk
 
 load_dotenv()
+
+sentry_sdk.init(
+    dsn=os.environ.get("SENTRY_DSN"),
+    # To customize collected data (user info, request bodies, AI inputs/outputs),
+    # see https://docs.sentry.io/platforms/python/data-management/data-collected/
+    # data_collection={"user_info": False},
+)
 
 app = Flask(__name__)
 app.secret_key = 'mamotchi_secret_key_pixel'
