@@ -2,7 +2,7 @@
 
 > 2026-10-10 時点の `main`（`fd5c71f`）を全ファイル読んで書いた**現状の仕様**です。
 > 「こうあるべき」ではなく「今こう動く」を書いています。既知の問題は §9 にまとめました。
-> コードを変えたらこのファイルも直してください。
+> コードを変えたらこのファイルも直してください。「どこを編集すればいいか」の早見表は [AGENTS.md](./AGENTS.md) §3。
 
 - 本番: https://test-fawn-iota-73.vercel.app/ （Vercel / `api/` をルートにデプロイ）
 - リポジトリ: https://github.com/yama-k-07/test
@@ -58,6 +58,9 @@
 | `api/ANALYSIS.md` | 古い | 2026-08 時点の解析。存在しないファイル（`index.py`, `M5emu.py` 等）に言及。**このSPEC.mdが正** |
 | `api/properioai/` | 不要 | Python venv がコミットされている（1300ファイル超）。アプリコードではない |
 | `requirements.txt` | 使用中 | `flask, supabase, requests, python-dotenv`（バージョン未固定） |
+| `AGENTS.md` / `CLAUDE.md` | 説明書 | 開発ガイド（AI・人間共通）。`CLAUDE.md` は AGENTS.md を読み込むだけ |
+| `docs/AI_WORKFLOW.md` | 説明書 | 共同開発者が生成 AI と開発する手順 |
+| `scripts/make_ai_context.py` | 道具 | チャット AI に渡すまとめファイル `dist/ai_context.md` を作る（`dist/` は Git 管理外） |
 | `.gitignore` | | `.vercel`, `.env` のみ |
 
 外部ライブラリ（CDN）: Bulma 0.9.4、SortableJS 1.15.0、`@supabase/supabase-js@2`（UMD）、Google Fonts DotGothic16。
@@ -71,6 +74,7 @@
 | `SUPABASE_URL` | Supabase プロジェクトURL（サーバー・ブラウザ両方で使用） |
 | `SUPABASE_SERVICE_ROLE_KEY` | サーバー側の Supabase クライアント。**RLS をバイパスする全権キー** |
 | `SUPABASE_ANON_KEY` | ブラウザの Realtime 購読用。`index.html` に埋め込まれて配信される |
+| `AP_SHARED_TOKEN` | ESP32 AP の heartbeat（`/api/ap_heartbeat`）の共有トークン。firmware の `AP_TOKEN` と同じ値。未設定なら heartbeat は 503 で受け付けない |
 
 - `app.secret_key` はハードコード（`'mamotchi_secret_key_pixel'`）。
 - ローカル起動: `api/.env` に上記を書いて
@@ -101,6 +105,7 @@
 
 | `TABLE_FIRE_LOCATION` | `fire_location` | `id`（常に1） | `active`, `distance_m`, `updated_at` | Flask | Flask |
 | `TABLE_DEVICE_FIRE_ALERTS` | ★`device_fire_alerts` | `device_id` | `fire_active`, `direction`, `distance_m`, `message`, `approx`, `updated_at` | Flask | ウォッチ（§7.7） |
+| `TABLE_AP_NODES` | `ap_nodes` | `mac`（大文字） | `label`, `distance_m`, `enabled`, `fw`, `uptime_s`, `sta_count`, `tx_power_dbm`, `channel`, `uplink_rssi`, `last_seen`, `created_at` | ESP32（heartbeat）＋ Flask（管理画面） | Flask（§6.2, §7.8） |
 
 ★ = デバイスとの境界になっている（と思われる）テーブル。`fire_location` / `device_fire_alerts` は 2026-10-10 追加（`supabase/fire_location.sql`）。
 
@@ -163,6 +168,10 @@
 | `GET /api/fire_location` | 🔒 | `{active, distance_m, updated_at}` | なし |
 | `POST /api/fire_location` | 🔒 | `{ratio}`（マップ横軸 0〜1）か `{distance_m}` → `{message, fire}` | `fire_location` を保存し `device_fire_alerts` を更新（§7.7） |
 | `DELETE /api/fire_location` | 🔒 | `{message, fire}` | 火災位置を解除し、全デバイスの `fire_active=false` |
+| `POST /api/ap_heartbeat` | トークン | ESP32 AP が 30 秒ごとに送る。ヘッダー `X-AP-Token`、本文 `{mac, label, distance_m, fw, uptime_s, sta_count, tx_power_dbm, channel, uplink_rssi}` → `{message, registered}` | `ap_nodes` を upsert（初回だけ label / distance_m を初期値にし、以後は稼働情報のみ） |
+| `GET /api/ap_nodes` | 🔒 | `ap_nodes` 全行＋`online`（heartbeat が 90 秒以内） | なし |
+| `POST /api/ap_nodes` | 🔒 | `{mac, label?, distance_m?, enabled?}` | 管理画面からの設定変更 |
+| `DELETE /api/ap_nodes` | 🔒 | `{mac}` | 行を削除（動いていれば次の heartbeat で再登録） |
 
 `GET /api/wifi_map` は `fire: {active, distance_m, ratio}` と各 worker の `fire_message` も返し、そのたびに `device_fire_alerts` を更新する。
 
@@ -181,46 +190,56 @@
 ### 6.2 位置推定 `estimate_positions()`（2026-10-10 改訂）
 トンネルマップ（`/api/wifi_map`）とエリアボード（`/api/entry_status`）は**同じ関数**で位置とエリアを決める。
 
-定数（`app.py` の「位置推定」ブロック。画面は `/api/wifi_map` の `ap_markers` / `area_layout` を受け取って描くので JS 側の変更は不要）:
+**AP の距離の出どころ（`load_ap_map()` → `ApMap`）**: 次の2つを合わせる。同じ BSSID が両方にあれば ESP32 AP を優先。MAC は大文字小文字を区別しない（`norm_mac`。Android の BSSID は小文字、ESP32 は大文字で報告する）。
+- **AP位置設定**（`ap_positions`）: 位置番号 0〜5 → `AP_DISTANCES_M`。既存の6台用
+- **ESP32 AP**（`ap_nodes`）: AP ごとの `distance_m`。`enabled=false` や距離未設定の AP は使わない。台数・間隔に制限なし（§7.8）
+
+トンネルの両端は最も手前と最も奥の AP、`ApMap.spacing` は隣り合う AP の間隔の**中央値**。外れ値（`OUTLIER_SPACINGS`＝1.5 倍）と火災の「すぐ近く」（`FIRE_NEAR_SPACINGS`＝0.5 倍）はこの倍数なので、ESP32 AP を増やして間隔を詰めると閾値も自動で細かくなる。`/api/wifi_map` は `ap_markers[].status`（`online` / `offline` / `manual`）と `ap_spacing_m` も返す。
+
+定数（`app.py` の「位置推定」ブロック。画面は `/api/wifi_map` の `ap_markers` / `area_layout` を受け取って描く。AP位置設定のプルダウン表示だけ `admin.js` の `AP_LABELS` / `AP_POSITION_DISTANCES_M` を使う）:
 
 | 定数 | 値 | 意味 |
 |---|---|---|
-| `AP_LABELS` | `['1','3','4','5','6','11']` | 位置番号 0〜5 の表示名 |
-| `AP_DISTANCES_M` | `[1, 3, 4, 5, 6, 11]` | 位置番号 0〜5 の入口からの実距離[m]（画面説明「0=入口1m 〜 5=奥11m」に合わせた。**等間隔ではない**） |
+| `AP_LABELS` | `['1','3','4','5','6','11']` | 位置番号 0〜5 の表示名（**AP の名前。距離ではない**） |
+| `AP_DISTANCES_M` | `[0, 100, 200, 300, 400, 500]` | 位置番号 0〜5 の入口からの距離[m]。実機トンネルは AP1=入口0m から **100m 間隔**で AP11=500m（2026-10-21 確認） |
+| `ApMap.spacing` | `100`（自動計算） | 隣り合う AP の間隔の中央値。下の閾値はこの何倍かで決める |
 | `MAC01_WEIGHT` | `0.8` | mac01（最も強いAP。ウォッチの仕様）の重み。mac02（2番目）は 0.2 |
 | `SMOOTHING_WINDOW_SEC` | `30` | 最新レポートから何秒前までのレポートを使うか |
 | `SMOOTHING_HALF_LIFE_SEC` | `8` | 古いレポートの重みが半分になる秒数 |
 | `SMOOTHING_MAX_SAMPLES` | `8` | 使うレポートの最大件数 |
-| `OUTLIER_M` | `5.0` | 重み付き中央値からこれ以上離れたレポートは外れ値として捨てる |
+| `OUTLIER_SPACINGS` | `1.5`（100m 間隔なら 150m） | 重み付き中央値から「AP 間隔 × これ」以上離れたレポート（AP を飛び越えるブレ）は捨てる |
+| `AP_NODE_ONLINE_SEC` | `90` | ESP32 AP の heartbeat がこの秒数届かなければ停止扱い（マップで灰色＋×） |
 
 デバイスごとの手順:
-1. 1レポートの距離 = `0.8 × 距離(mac01) + 0.2 × 距離(mac02)`（片方しか `ap_positions` に無ければその AP の距離）
+1. 1レポートの距離 = `0.8 × 距離(mac01) + 0.2 × 距離(mac02)`（片方しか `ap_positions` に無ければその AP の距離）。例: mac01=AP4(200m), mac02=AP5(300m) → 220m
 2. 直近 60 秒の `wifi_reports` を1回だけ取得し（`load_recent_wifi_reports`）、そのデバイスの最新から 30 秒以内・最大 8 件を集める
-3. 重み `0.5^(経過秒/8)` で重み付き中央値を出し、そこから 5m 以上離れたものを捨てて重み付き平均 → `distance_m`
-4. `ratio = (distance_m − 1) / (11 − 1)`（マップ横軸。0=AP1, 1=AP11）
+3. 重み `0.5^(経過秒/8)` で重み付き中央値を出し、そこから 150m 以上離れたものを捨てて重み付き平均 → `distance_m`
+4. `ratio = (distance_m − 0) / (500 − 0)`（マップ横軸。0=AP1, 1=AP11）
 5. エリアの決め方（上ほど優先）:
    1. 全エリアの `bssid`（エリア割当設定）が `ap_positions` にある → エリア中心＝その AP の距離、**最寄りのエリア**。区切りは中心間の中点
    2. 最新レポートの mac01 / mac02 がどれかのエリアの `bssid` と一致 → そのエリア（旧エリアボード方式）
-   3. トンネル（AP1〜AP11 の実距離）を `area_order` で等分した区間（旧マップ方式）
+   3. トンネル（AP1〜AP11 の距離）を `area_order` で等分した区間（旧マップ方式）
 6. 最新レポートの AP がどちらも `ap_positions` に無い場合は古い位置を使わない。ただし 5-2 の BSSID 一致があれば、そのエリアの中央に `approx: true` で置く（マップでは点線の円）
 
-`/api/wifi_map` の `workers[]` は `{device_id, username, report, ratio, distance_m, area_id, approx, online}`。ほかに `ap_markers:[{label, distance_m, ratio}]` と `area_layout:[{area_id, start, end}]`（比率）を返す。
+**分解能の限界**: ウォッチは「強い AP の名前2つ」しか送らないので、1レポートで出せる位置は AP の位置か、その間の 20m / 80m 地点（0.8:0.2 の内分）くらいに限られる。平滑化で時間方向にならしても、AP 間 100m の中を細かく区別することはできない。RSSI を送れば 2 台の強さの差で内分できるが、シミュレーションでの改善は平均誤差で約 20%（18m → 15m）にとどまる。**一番効くのは AP を増やして間隔を詰めること**（50m 間隔で平均 11m、25m 間隔で 8m。§7.8）。
+
+`/api/wifi_map` の `workers[]` は `{device_id, username, report, ratio, distance_m, area_id, approx, online}`。ほかに `ap_markers:[{label, distance_m, ratio}]` と `area_layout:[{area_id, start, end}]`（比率）を返す。マップの AP ラベルは「AP3 100m」（狭い画面では「AP3」）。
 
 `online_device_ids` / `online` = 最新レポートの `created_at` が **60秒以内**（`ONLINE_THRESHOLD_SEC`）。オフラインの作業者はマップで薄く描く（最後に見えた位置）。
 `parse_ts()` は小数秒を6桁にそろえてからパースする（Python 3.10 の `fromisoformat` は `.12345` のような桁で失敗し、以前はそのデバイスが常にオフライン扱いになり得た）。
 
 `sync_device_reports_from_wifi()`: デバイス側の書き込み先が `device_instructions.report` へ移行するまでの橋渡し。`wifi_reports` 最新行の `report` と違うデバイスだけ upsert する。
 
-**精度（シミュレーション）**: トンネルを往復する作業者を、距離減衰＋6dB の電波ノイズで「強い順に2つの AP」を5秒ごとに送る設定で比較（40試行）。
+**精度（シミュレーション、AP 100m 間隔）**: 0〜500m のトンネルを 1m/秒で往復（奥で 60 秒停止）する作業者が、距離減衰（係数 2）＋電波ノイズで「強い順に2つの AP」を送る設定で比較（30試行）。旧＝最新1件の mac01/mac02 の中点、新＝今の方式。エリアは 100m ごと5区間。
 
 | 電波ノイズ / 送信間隔 | 平均誤差 | 90%点誤差 | エリア正答率 | 1回ごとの位置の跳び |
 |---|---|---|---|---|
-| 4dB / 5秒 | 1.70m → 0.94m | 4.13m → 1.90m | 70% → 79% | 1.19m → 0.52m |
-| 6dB / 5秒 | 1.96m → 1.08m | 4.38m → 2.21m | 68% → 76% | 1.30m → 0.59m |
-| 8dB / 5秒 | 2.19m → 1.26m | 4.75m → 2.54m | 62% → 74% | 1.41m → 0.72m |
-| 6dB / 10秒 | 1.97m → 1.16m | 4.26m → 2.45m | 67% → 83% | 1.41m → 1.14m |
+| 4dB / 5秒 | 39m → 14m | 80m → 28m | 77% → 86% | 37m → 9m |
+| 6dB / 5秒 | 52m → 18m | 100m → 38m | 65% → 81% | 57m → 12m |
+| 8dB / 5秒 | 63m → 25m | 130m → 51m | 57% → 75% | 72m → 18m |
+| 6dB / 10秒 | 50m → 23m | 100m → 46m | 66% → 77% | 57m → 24m |
 
-実機の送信間隔とノイズは未計測。平滑化のぶん、動いている人の表示は数秒遅れる。
+実機の送信間隔とノイズは未計測。トンネル内は電波が遠くまで届きやすく（導波管効果）、実際の誤差はこれより大きい可能性がある。平滑化のぶん、動いている人の表示は数秒遅れる。
 
 ### 6.3 エリアボードの位置 `GET /api/entry_status`
 §6.2 と同じ `estimate_positions()` の `area_id` を返す（2026-10-10 まではマップと別方式の「mac01 と bssid の完全一致」だけだった）。レスポンスの形 `[{area_id, username, device_id}]` は変えていない。
@@ -299,9 +318,9 @@
 
 ### 7.7 火災位置（管理マップで指定 → ウォッチへ通知）
 - 画面: マップ上の「火災位置を指定」→ 指定モード（マップに赤い点線枠、カーソル位置に半透明の炎のプレビュー）→ マップをクリック → 確認ダイアログ → `POST /api/fire_location {ratio}`。Esc か「指定をやめる」で取り消し。「火災位置を解除」→ 確認 → `DELETE /api/fire_location`。
-- 表示: 火災位置に赤い帯＋ドット絵の炎＋「火災 約Xm」。ボタン横に「火災位置: 入口から約Xm（ウォッチに通知中）」。作業者のポップアップに「ウォッチの表示: 火災: 奥 約4m」。
-- サーバー: `fire_location`（id=1 の1行）に `distance_m`（入口からの m、AP1〜AP11 の範囲に丸める）を保存。保存直後と、以後 `/api/wifi_map` のたびに（＝ダッシュボードを開いている間5秒ごと）各デバイスの推定位置（§6.2）と比べて `device_fire_alerts` を更新する（値が変わった行だけ upsert）。
-- 方向の判定（`fire_relation`）: `差 = 火災の距離 − 自分の距離`。`|差| ≤ FIRE_NEAR_M(2m)` → `near`、`差 > 0` → `inward`（奥側）、`差 < 0` → `outward`（入口側）。位置が推定できないデバイスは `unknown`。
+- 表示: 火災位置に赤い帯＋ドット絵の炎＋「火災 約Xm」。ボタン横に「火災位置: 入口から約Xm（ウォッチに通知中）」。作業者のポップアップに「ウォッチの表示: 火災: 奥 約320m」。
+- サーバー: `fire_location`（id=1 の1行）に `distance_m`（入口からの m。0〜500m の範囲に収めて 1m 単位）を保存。保存直後と、以後 `/api/wifi_map` のたびに（＝ダッシュボードを開いている間5秒ごと）各デバイスの推定位置（§6.2）と比べて `device_fire_alerts` を更新する（値が変わった行だけ upsert）。
+- 方向の判定（`fire_relation`）: `差 = 火災の距離 − 自分の距離`。`|差| ≤ FIRE_NEAR_M`（AP 間隔の半分＝50m）→ `near`、`差 > 0` → `inward`（奥側）、`差 < 0` → `outward`（入口側）。位置が推定できないデバイスは `unknown`。
 - `area_status_v2.fire`（エリアカードの火災チェック）とは**連動しない**。別の機能。
 
 #### ウォッチ側との契約（★ ウォッチ側の実装が必要）
@@ -311,12 +330,33 @@
 |---|---|---|
 | `fire_active` | bool | 火災位置が出ているか。false なら他の列は null |
 | `direction` | text | `inward`=奥側に火災 / `outward`=入口側に火災 / `near`=すぐ近く / `unknown`=自分の位置が不明 |
-| `distance_m` | float | 自分から火災までの推定距離[m]（誤差 1〜2m） |
-| `message` | text | そのまま表示できる文。例「火災: 奥 約4m」「火災: 手前 約3m」「火災: すぐ近く（約1m）」 |
+| `distance_m` | float | 自分から火災までの推定距離[m]（10m 単位に丸め。推定誤差は平均 20m 前後） |
+| `message` | text | そのまま表示できる文。例「火災: 奥 約320m」「火災: 手前 約150m」「火災: すぐ近く（約30m）」 |
 | `approx` | bool | true=自分の位置がエリア単位でしか分かっていない（距離は目安） |
 | `updated_at` | timestamptz | 最終更新 |
 
 テーブル作成 SQL は `supabase/fire_location.sql`（**本番 Supabase で1回実行が必要**。未実行だと火災位置の保存は 500、`/api/wifi_map` は火災なしとして動く）。
+
+### 7.8 ESP32 AP（ESP32-S3 で作る位置の目印）
+- firmware: `firmware/esp32s3_ap/`（Arduino-ESP32。書き込み手順は同フォルダの README）。テーブル: `supabase/ap_nodes.sql`。環境変数: `AP_SHARED_TOKEN`
+- 各 ESP32 は softAP（SSID `MAMOTCHI-<label>`、接続上限1）を立てるだけ。**ウォッチは接続せず、スキャンで BSSID を拾う**。ウォッチ側の送信（`wifi_reports`）は変わらない
+- 上り回線（現場 Wi-Fi）があれば 30 秒ごとに `POST /api/ap_heartbeat`（`X-AP-Token`）。初回で `ap_nodes` に自動登録され、firmware の `AP_LABEL` / `AP_DISTANCE_M` が初期値になる。以後は稼働情報だけ更新し、管理画面で直した表示名・距離・使う/使わないは上書きしない
+- 上り回線が無い場合は AP としてだけ動く。シリアルに出る BSSID を「AP位置設定」に手で登録すれば位置推定に使える（ただし AP位置設定は 6 か所・100m 間隔の位置番号しか選べない）
+- 画面: 設定の下に「ESP32 AP」表（状態・表示名・BSSID・入口からの距離・位置推定に使う/使わない・最終通信・保存/削除）。5 秒ごとに更新、編集中は止まる。トンネルマップの AP マーカーは停止中なら灰色＋×（凡例あり）。AP が密なときはラベルを数台おきに間引く
+- 「使う/使わない」はチェックボックスではなくプルダウン（チェックボックスは全体のイベントで行が赤く点滅する仕様のため。§7.4）
+
+**AP 間隔と精度（シミュレーション、0〜500m、電波ノイズ 6dB）**
+
+| AP 間隔 | 台数 | 送信 5 秒: 平均 / 90%点 | 送信 30 秒（スキャン回数制限）: 平均 / 90%点 |
+|---|---|---|---|
+| 100m | 6 | 19m / 39m | 30m / 60m |
+| 50m | 11 | 11m / 23m | 17m / 35m |
+| 25m | 21 | 8m / 15m | 9m / 20m |
+
+- 平滑化の窓をウォッチの送信間隔に合わせて伸ばす案も試したが、50m 間隔では表示の遅れで逆に悪化したので採用していない（30 秒固定のまま）
+- Android / Wear OS は Wi-Fi スキャン回数を制限する（フォアグラウンドで 2 分に 4 回が標準）。送信を 5 秒間隔にしても中身が 30 秒前のスキャンのままになりうるので、ウォッチ側でスキャン結果の時刻を確認すること
+- 送信出力（`TX_POWER_DBM`）を下げると遠くの AP が上位に入りにくくなる。効果は現地の電波次第なのでシミュレーションしていない
+
 
 ---
 

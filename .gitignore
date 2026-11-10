@@ -1,2 +1,6 @@
 .vercel
 .env
+
+.claude/settings.local.json
+firmware/**/config.h
+dist/
