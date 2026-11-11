@@ -5,7 +5,7 @@
 create table if not exists public.fire_location (
   id          integer primary key default 1 check (id = 1),
   active      boolean not null default false,
-  distance_m  double precision,          -- 入口からの距離[m]（AP1=1m 〜 AP11=11m）
+  distance_m  double precision,          -- 入口からの距離[m]（AP1=0m 〜 AP11=500m、100m間隔）
   updated_at  timestamptz not null default now()
 );
 
@@ -15,8 +15,8 @@ create table if not exists public.device_fire_alerts (
   fire_active boolean not null default false,
   direction   text check (direction in ('inward', 'outward', 'near', 'unknown')),
                                          -- inward=奥側 / outward=入口側 / near=すぐ近く / unknown=自分の位置が不明
-  distance_m  double precision,          -- 自分から火災までの距離[m]（推定。誤差 1〜2m）
-  message     text,                      -- そのまま画面に出せる文（例「火災: 奥 約4m」）
+  distance_m  double precision,          -- 自分から火災までの距離[m]（10m 単位に丸め。推定誤差は平均 20m 前後）
+  message     text,                      -- そのまま画面に出せる文（例「火災: 奥 約320m」）
   approx      boolean not null default false, -- true=自分の位置がエリア単位でしか分かっていない
   updated_at  timestamptz not null default now()
 );

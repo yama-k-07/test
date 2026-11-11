@@ -932,3 +932,27 @@ input[type="checkbox"]:checked {
   color: var(--state-fire);
   margin: 0 0 8px;
 }
+
+/* ---------- ESP32 AP ---------- */
+.legend-ap-off {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #9aa5a0;
+  border: 2px solid var(--state-fire);
+}
+
+.mono-cell {
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 14px;
+  white-space: nowrap;
+}
+
+.ap-node-actions {
+  white-space: nowrap;
+}
+
+.ap-node-distance {
+  max-width: 9em;
+}

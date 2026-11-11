@@ -386,7 +386,7 @@ function toggleFireMode() {
 
 async function placeFireLocation(ratio) {
   const m = ratioToDistanceM(ratio);
-  const where = m === null ? 'この位置' : `入口から約${m.toFixed(1)}mの位置`;
+  const where = m === null ? 'この位置' : `入口から約${m.toFixed(0)}mの位置`;
   if (!confirm(`${where}を火災位置にして、全ウォッチに通知しますか？`)) return;
   try {
     const res = await fetch('/api/fire_location', {
@@ -436,7 +436,7 @@ function updateFireStatus() {
   if (fireMode) {
     status.textContent = 'マップ上の火災の位置をクリックしてください（Escでやめる）';
   } else if (active) {
-    status.textContent = `火災位置: 入口から約${Number(fire.distance_m).toFixed(1)}m（ウォッチに通知中）`;
+    status.textContent = `火災位置: 入口から約${Number(fire.distance_m).toFixed(0)}m（ウォッチに通知中）`;
   } else {
     status.textContent = '火災位置: 未設定';
   }
@@ -941,6 +941,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initWifiMapRealtime();
   loadApPositionsTable();
   loadApPresetList();
+  loadApNodesTable();
   loadEntryManagement();
   initTunnelMapInteraction();
 
@@ -950,6 +951,7 @@ document.addEventListener('DOMContentLoaded', () => {
     loadAreaMapTable();
     loadUserTable();
     loadEntryManagement();
+    loadApNodesTable();
     loadTunnelMap();
   }, 5000);
 });
@@ -1043,6 +1045,7 @@ function renderTunnelMap(data) {
   const C_GREEN = '#2d9610';
   const C_RED = '#ff4b2b';
   const C_BLUE = '#207ce5';
+  const C_OFF = '#9aa5a0';
   const C_DIV = 'rgba(25, 76, 34, 0.35)';
   const FONT = "16px 'DotGothic16', sans-serif";
   const FONT_SM = "12px 'DotGothic16', sans-serif";
@@ -1081,32 +1084,50 @@ function renderTunnelMap(data) {
   // APマーカー（トンネル下端）。実距離の位置に置く（サーバーの ap_markers。古い応答なら等間隔）
   const markers = Array.isArray(data.ap_markers) && data.ap_markers.length
     ? data.ap_markers
-    : Array.from({ length: ap_count }, (_, i) => ({ label: ap_labels[i] ?? String(i), ratio: i / (ap_count - 1) }));
-  markers.forEach(m => {
+    : Array.from({ length: ap_count }, (_, i) => ({ label: `AP${ap_labels[i] ?? i}`, ratio: i / (ap_count - 1) }));
+  // ラベルは「AP3 100m」。重なる幅では「AP3」だけ、それでも重なるなら数台おきに出す（ESP32 AP を密に並べた時など）
+  ctx.font = FONT_SM;
+  const longLabel = m => (m.distance_m === undefined || m.distance_m === null)
+    ? m.label : `${m.label} ${Math.round(m.distance_m)}m`;
+  const minGapPx = markers.slice(1).reduce((g, m, i) => Math.min(g, tW * (m.ratio - markers[i].ratio)), Infinity);
+  const maxLongPx = Math.max(...markers.map(m => ctx.measureText(longLabel(m)).width));
+  const maxShortPx = Math.max(...markers.map(m => ctx.measureText(m.label).width));
+  const useLong = maxLongPx + 8 <= minGapPx;
+  const labelEvery = useLong ? 1 : Math.max(1, Math.ceil((maxShortPx + 8) / Math.max(1, minGapPx)));
+  markers.forEach((m, i) => {
     const x = tX + tW * m.ratio;
     const y = tY + tH;
-    ctx.fillStyle = C_BLUE;
-    ctx.strokeStyle = C_DARK;
+    const off = m.status === 'offline';
+    ctx.fillStyle = off ? C_OFF : C_BLUE;
+    ctx.strokeStyle = off ? C_RED : C_DARK;
     ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.arc(x, y, 5, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
-    ctx.fillStyle = C_TEXT;
+    if (off) {
+      // 停止中の ESP32 AP は × を重ねる
+      ctx.beginPath();
+      ctx.moveTo(x - 4, y - 4); ctx.lineTo(x + 4, y + 4);
+      ctx.moveTo(x + 4, y - 4); ctx.lineTo(x - 4, y + 4);
+      ctx.stroke();
+    }
+    if (i % labelEvery !== 0 && i !== markers.length - 1) return;
+    ctx.fillStyle = off ? C_RED : C_TEXT;
     ctx.font = FONT_SM;
     ctx.textAlign = 'center';
-    ctx.fillText(`AP${m.label}`, x, y + 22);
+    ctx.fillText(useLong ? longLabel(m) : m.label, x, y + 22);
   });
 
   // 火災位置（作業者より下に描く）と、指定モード中のカーソル位置のプレビュー
   tunnelGeom = { tX, tW, tY, tH };
   const fire = data.fire;
   if (fire && fire.active && fire.ratio !== null && fire.ratio !== undefined) {
-    drawFireMarker(ctx, tX + tW * fire.ratio, tY, tH, `火災 約${Number(fire.distance_m).toFixed(1)}m`, false);
+    drawFireMarker(ctx, tX + tW * fire.ratio, tY, tH, `火災 約${Number(fire.distance_m).toFixed(0)}m`, false);
   }
   if (fireMode && fireHoverRatio !== null) {
     const m = ratioToDistanceM(fireHoverRatio);
-    drawFireMarker(ctx, tX + tW * fireHoverRatio, tY, tH, m === null ? 'ここ' : `ここ 約${m.toFixed(1)}m`, true);
+    drawFireMarker(ctx, tX + tW * fireHoverRatio, tY, tH, m === null ? 'ここ' : `ここ 約${m.toFixed(0)}m`, true);
   }
 
   // 作業者の円（衝突を避けてY方向にずらす）
@@ -1239,10 +1260,12 @@ function renderTunnelMap(data) {
 
 // ======== AP位置設定 ========
 const AP_LABELS = ['1', '3', '4', '5', '6', '11'];
+// 入口からの距離[m]。app.py の AP_DISTANCES_M と同じ値にする（プルダウンの表示用）
+const AP_POSITION_DISTANCES_M = [0, 100, 200, 300, 400, 500];
 
 function apPositionOptions(selectedPos) {
   return AP_LABELS.map((label, i) =>
-    `<option value="${i}" ${i === selectedPos ? 'selected' : ''}>AP${label}</option>`
+    `<option value="${i}" ${i === selectedPos ? 'selected' : ''}>AP${label}（${AP_POSITION_DISTANCES_M[i]}m）</option>`
   ).join('');
 }
 
@@ -1471,6 +1494,122 @@ async function deleteApPreset() {
     console.error('deleteApPreset error:', e);
     alert('削除に失敗しました');
   }
+}
+
+
+// ======== ESP32 AP ========
+let lastApNodesSig = null;
+
+async function loadApNodesTable() {
+  const body = document.getElementById('apNodesTableBody');
+  if (!body || isEditing) return;
+
+  let nodes;
+  try {
+    const res = await fetch('/api/ap_nodes');
+    if (!res.ok) {
+      console.error('loadApNodesTable: APIエラー', res.status);
+      return;
+    }
+    nodes = await res.json();
+  } catch (e) {
+    console.error('loadApNodesTable fetch error:', e);
+    return;
+  }
+  if (!Array.isArray(nodes)) return;
+
+  const sig = JSON.stringify(nodes);
+  if (sig === lastApNodesSig) return;
+  lastApNodesSig = sig;
+
+  body.innerHTML = '';
+  if (nodes.length === 0) {
+    body.innerHTML = '<tr><td colspan="7" style="text-align:center;color:grey;">まだ登録された ESP32 AP はありません（firmware/esp32s3_ap を書き込んで電源を入れると表示されます）</td></tr>';
+    return;
+  }
+
+  nodes.forEach(n => {
+    const row = document.createElement('tr');
+    row.dataset.mac = n.mac;
+    const online = !!n.online;
+    const enabled = n.enabled !== false;
+    const distance = n.distance_m === null || n.distance_m === undefined ? '' : n.distance_m;
+    row.innerHTML = `
+      <td><span class="entry-badge ${online ? 'entry-in' : 'entry-out'}">${online ? '稼働中' : '停止'}</span></td>
+      <td><input class="input ap-node-label" type="text" value="${escapeHtml(n.label || '')}" placeholder="A050"></td>
+      <td class="mono-cell">${escapeHtml(n.mac)}</td>
+      <td><input class="input ap-node-distance" type="number" min="0" step="1" value="${escapeHtml(distance)}" placeholder="未設定"></td>
+      <td>
+        <select class="select ap-node-enabled">
+          <option value="1" ${enabled ? 'selected' : ''}>使う</option>
+          <option value="0" ${enabled ? '' : 'selected'}>使わない</option>
+        </select>
+      </td>
+      <td>${formatEntryTime(n.last_seen)}</td>
+      <td class="ap-node-actions">
+        <button class="button is-success is-small" onclick="saveApNode(this)">保存</button>
+        <button class="button is-danger is-small" onclick="deleteApNode(this)">削除</button>
+      </td>
+    `;
+    body.appendChild(row);
+  });
+}
+
+async function saveApNode(button) {
+  const row = button.closest('tr');
+  const mac = row.dataset.mac;
+  const distanceText = row.querySelector('.ap-node-distance').value.trim();
+  const payload = {
+    mac,
+    label: row.querySelector('.ap-node-label').value.trim(),
+    distance_m: distanceText === '' ? null : Number(distanceText),
+    enabled: row.querySelector('.ap-node-enabled').value === '1',
+  };
+  try {
+    const res = await fetch('/api/ap_nodes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) {
+      const b = await res.json().catch(() => ({}));
+      alert('保存に失敗しました: ' + (b.error || res.status));
+      return;
+    }
+  } catch (e) {
+    console.error('saveApNode error:', e);
+    alert('保存に失敗しました');
+    return;
+  } finally {
+    isEditing = false;
+  }
+  lastApNodesSig = null;
+  loadApNodesTable();
+  loadTunnelMap();
+}
+
+async function deleteApNode(button) {
+  const row = button.closest('tr');
+  const mac = row.dataset.mac;
+  if (!confirm(`ESP32 AP ${mac} を一覧から削除しますか？（動いていれば次の通信で再登録されます）`)) return;
+  try {
+    const res = await fetch('/api/ap_nodes', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mac })
+    });
+    if (!res.ok) {
+      alert('削除に失敗しました');
+      return;
+    }
+  } catch (e) {
+    console.error('deleteApNode error:', e);
+    alert('削除に失敗しました');
+    return;
+  }
+  lastApNodesSig = null;
+  loadApNodesTable();
+  loadTunnelMap();
 }
 
 

@@ -4,6 +4,7 @@ from dotenv import load_dotenv
 from functools import wraps
 from datetime import datetime, timezone, timedelta
 import threading
+import hmac
 import json
 import os
 import re
@@ -36,6 +37,9 @@ TABLE_ENTRY_LOG = "entry_log"
 # スキーマは supabase/fire_location.sql。ウォッチは device_fire_alerts の自分の行を読む。
 TABLE_FIRE_LOCATION = "fire_location"
 TABLE_DEVICE_FIRE_ALERTS = "device_fire_alerts"
+# ESP32-S3 で作った AP（firmware/esp32s3_ap）。heartbeat で自動登録され、距離は管理画面で設定する。
+# スキーマは supabase/ap_nodes.sql。
+TABLE_AP_NODES = "ap_nodes"
 
 entry_status_table = []
 last_seen_dict = {}
@@ -192,57 +196,154 @@ def load_area_order():
 
 
 # ==========================================
+#  AP の配置（AP位置設定 ＋ ESP32 AP）
+# ==========================================
+# AP位置設定（ap_positions）の位置番号 0〜5 ごとの表示名（AP の名前。距離ではない）と、入口からの距離[m]。
+# 実機トンネルは入口の AP1=0m から 100m 間隔で AP11=500m。
+# admin.js の AP_LABELS / AP_POSITION_DISTANCES_M は AP位置設定のプルダウン表示用なので合わせて直す。
+# ESP32 AP（ap_nodes）は AP ごとに distance_m を持つので、台数・間隔はここに縛られない。
+AP_LABELS = ['1', '3', '4', '5', '6', '11']
+AP_DISTANCES_M = [0.0, 100.0, 200.0, 300.0, 400.0, 500.0]
+AP_COUNT = len(AP_LABELS)
+
+# ESP32 AP の heartbeat がこの秒数届かなければ「停止」とみなす（firmware は 30 秒ごとに送る）
+AP_NODE_ONLINE_SEC = 90
+
+
+def norm_mac(mac):
+    """MAC を比較用にそろえる（前後の空白を除いて大文字）。空なら空文字"""
+    return str(mac).strip().upper() if mac else ""
+
+
+class ApMap:
+    """MAC → AP（入口からの距離・表示名・種類）と、そこから決まるトンネルの形。
+    トンネルの両端は最も手前と最も奥の AP、AP 間隔は隣り合う AP の間隔の中央値。
+    外れ値・「すぐ近く」の閾値は AP 間隔の倍数なので、ESP32 AP を増やして間隔を詰めれば自動で細かくなる。"""
+
+    def __init__(self, entries):
+        # entries: {mac: {'distance_m': float, 'label': str, 'source': 'manual'|'esp', 'online': bool|None}}
+        # MAC は大文字小文字を区別しない（Android の BSSID は小文字、ESP32 は大文字で報告する）
+        self.entries = {norm_mac(m): e for m, e in entries.items() if norm_mac(m)}
+        # 同じ AP が大文字・小文字の両方で入っていたら後の方（load_ap_map では ESP32 AP）が残る
+        ds = sorted({e['distance_m'] for e in self.entries.values()}) or list(AP_DISTANCES_M)
+        self.start = ds[0]
+        self.end = ds[-1]
+        gaps = sorted(b - a for a, b in zip(ds, ds[1:]) if b - a > 0)
+        default_gap = AP_DISTANCES_M[1] - AP_DISTANCES_M[0]
+        self.spacing = gaps[len(gaps) // 2] if gaps else default_gap
+
+    def __contains__(self, mac):
+        return norm_mac(mac) in self.entries
+
+    def __bool__(self):
+        return bool(self.entries)
+
+    def distance(self, mac):
+        e = self.entries.get(norm_mac(mac))
+        return e['distance_m'] if e else None
+
+    def to_ratio(self, distance_m):
+        """距離[m] → マップ横軸の比率 0.0（最も手前の AP）〜 1.0（最も奥の AP）"""
+        span = self.end - self.start
+        if span <= 0:
+            return 0.0
+        return max(0.0, min(1.0, (distance_m - self.start) / span))
+
+    def from_ratio(self, ratio):
+        return self.start + max(0.0, min(1.0, ratio)) * (self.end - self.start)
+
+    def clamp(self, distance_m):
+        return max(self.start, min(self.end, distance_m))
+
+    @property
+    def outlier_m(self):
+        return OUTLIER_SPACINGS * self.spacing
+
+    @property
+    def near_m(self):
+        return FIRE_NEAR_SPACINGS * self.spacing
+
+    def markers(self):
+        """マップ下端に描く AP。同じ距離の AP は1つにまとめる。
+        status: 'online' / 'offline'（ESP32 AP の heartbeat 途絶）/ 'manual'（AP位置設定。死活は分からない）"""
+        by_distance = {}
+        for e in self.entries.values():
+            by_distance.setdefault(e['distance_m'], []).append(e)
+        out = []
+        for d in sorted(by_distance):
+            group = by_distance[d]
+            esp = [e for e in group if e['source'] == 'esp']
+            if esp:
+                status = 'online' if any(e['online'] for e in esp) else 'offline'
+            else:
+                status = 'manual'
+            out.append({
+                'label': '/'.join(dict.fromkeys(e['label'] for e in group)),
+                'distance_m': d,
+                'ratio': round(self.to_ratio(d), 4),
+                'status': status,
+            })
+        return out
+
+
+def load_ap_nodes():
+    """ESP32 AP の一覧（ap_nodes）。テーブルが無ければ空"""
+    try:
+        res = supabase.table(TABLE_AP_NODES).select("*").execute()
+        return res.data or []
+    except Exception as e:
+        print(f"Error loading ap_nodes: {e}")
+        return []
+
+
+def load_ap_map():
+    """AP位置設定（ap_positions, 位置番号）と ESP32 AP（ap_nodes, 距離を直接持つ）を合わせた ApMap。
+    同じ MAC が両方にあれば ESP32 AP の設定を優先する。距離未設定・無効の ESP32 AP は位置推定に使わない。"""
+    entries = {}
+    for mac, pos in load_ap_positions().items():
+        try:
+            pos = int(pos)
+        except (TypeError, ValueError):
+            continue
+        if mac and 0 <= pos < AP_COUNT:
+            entries[mac] = {'distance_m': AP_DISTANCES_M[pos], 'label': f"AP{AP_LABELS[pos]}",
+                            'source': 'manual', 'online': None}
+    for node in load_ap_nodes():
+        mac = node.get('mac')
+        if not mac or node.get('enabled') is False or node.get('distance_m') is None:
+            continue
+        entries[mac] = {
+            'distance_m': float(node['distance_m']),
+            'label': node.get('label') or mac[-5:],
+            'source': 'esp',
+            'online': is_recent(node.get('last_seen'), AP_NODE_ONLINE_SEC),
+        }
+    return ApMap(entries)
+
+
+# ==========================================
 #  位置推定
 # ==========================================
-# ap_positions.position（位置番号 0〜5）ごとの表示名と、入口からの実距離[m]。
-# 画面の説明「0=入口1m 〜 5=奥11m」とラベルの通り、APは等間隔ではない。
-# AP を増減・移設したらここだけ直す（画面はこの値を /api/wifi_map から受け取って描く）。
-AP_LABELS = ['1', '3', '4', '5', '6', '11']
-AP_DISTANCES_M = [1.0, 3.0, 4.0, 5.0, 6.0, 11.0]
-AP_COUNT = len(AP_LABELS)
-TUNNEL_START_M = min(AP_DISTANCES_M)
-TUNNEL_END_M = max(AP_DISTANCES_M)
-
 # 平滑化: デバイスの最新レポートから遡って SMOOTHING_WINDOW_SEC 以内のレポートを
 # 新しいほど重く（半減期 SMOOTHING_HALF_LIFE_SEC）まとめる。
-# 重み付き中央値から OUTLIER_M 以上離れたサンプル（電波の一時的なブレ）は捨てる。
+# 重み付き中央値から「AP 間隔 × OUTLIER_SPACINGS」以上離れたサンプル（AP を飛び越える電波のブレ）は捨てる。
 SMOOTHING_WINDOW_SEC = 30
 SMOOTHING_HALF_LIFE_SEC = 8
 SMOOTHING_MAX_SAMPLES = 8
-OUTLIER_M = 5.0
+OUTLIER_SPACINGS = 1.5
 
 # 1レポート内の重み。mac01 は最も電波の強いAP、mac02 は2番目（ウォッチ側の仕様）なので、
 # 人は mac01 寄りにいる。値はシミュレーションで決めた（結果は SPEC.md §6.2）。
 MAC01_WEIGHT = 0.8
 
 
-def ap_distance_m(ap_pos, mac):
-    """MAC に対応する AP の入口からの距離[m]。未登録・範囲外なら None"""
-    pos = ap_pos.get(mac) if mac else None
-    try:
-        pos = int(pos)
-    except (TypeError, ValueError):
-        return None
-    if not (0 <= pos < AP_COUNT):
-        return None
-    return AP_DISTANCES_M[pos]
-
-
-def report_distance_m(row, ap_pos):
+def report_distance_m(row, ap_map):
     """1レポート分の推定距離[m]。mac01（最強）と mac02（2番目）を MAC01_WEIGHT で内分、片方だけならその AP"""
-    d1 = ap_distance_m(ap_pos, row.get('mac01'))
-    d2 = ap_distance_m(ap_pos, row.get('mac02'))
+    d1 = ap_map.distance(row.get('mac01'))
+    d2 = ap_map.distance(row.get('mac02'))
     if d1 is not None and d2 is not None:
         return MAC01_WEIGHT * d1 + (1 - MAC01_WEIGHT) * d2
     return d1 if d1 is not None else d2
-
-
-def to_ratio(distance_m):
-    """距離[m] → マップ横軸の比率 0.0（入口側AP）〜 1.0（最奥AP）"""
-    span = TUNNEL_END_M - TUNNEL_START_M
-    if span <= 0:
-        return 0.0
-    return max(0.0, min(1.0, (distance_m - TUNNEL_START_M) / span))
 
 
 def weighted_median(samples):
@@ -257,13 +358,13 @@ def weighted_median(samples):
     return ordered[-1][0]
 
 
-def smooth_distance_m(samples):
+def smooth_distance_m(samples, outlier_m):
     """samples: [(distance_m, age_sec)]（age は最新レポートからの経過秒）→ 平滑化した距離[m]"""
     weighted = [(d, 0.5 ** (age / SMOOTHING_HALF_LIFE_SEC)) for d, age in samples]
     if len(weighted) == 1:
         return weighted[0][0]
     med = weighted_median(weighted)
-    kept = [(d, w) for d, w in weighted if abs(d - med) <= OUTLIER_M]
+    kept = [(d, w) for d, w in weighted if abs(d - med) <= outlier_m]
     total = sum(w for _, w in kept)
     return sum(d * w for d, w in kept) / total
 
@@ -286,17 +387,17 @@ def load_recent_wifi_reports(window_sec=SMOOTHING_WINDOW_SEC * 2):
         return []
 
 
-def area_centers_m(area_rows, ap_pos):
-    """エリア割当設定（area_status_v2.bssid）の AP が AP位置設定にあれば、その距離をエリアの中心とする"""
+def area_centers_m(area_rows, ap_map):
+    """エリア割当設定（area_status_v2.bssid）の AP の距離が分かれば、それをエリアの中心とする"""
     centers = {}
     for row in (area_rows or []):
-        d = ap_distance_m(ap_pos, row.get('bssid'))
+        d = ap_map.distance(row.get('bssid'))
         if row.get('area_id') and d is not None:
             centers[row['area_id']] = d
     return centers
 
 
-def build_area_layout(area_order, centers):
+def build_area_layout(area_order, centers, ap_map):
     """マップ上のエリア区間 [{area_id, start, end}]（比率）。
     全エリアに中心があれば中心間の中点で区切る（＝最寄りのエリアに割り当て）。無ければ従来どおり等分。"""
     n = len(area_order)
@@ -306,8 +407,8 @@ def build_area_layout(area_order, centers):
         ordered = sorted(area_order, key=lambda a: centers[a])
         layout = []
         for i, a in enumerate(ordered):
-            start = 0.0 if i == 0 else to_ratio((centers[ordered[i - 1]] + centers[a]) / 2)
-            end = 1.0 if i == n - 1 else to_ratio((centers[a] + centers[ordered[i + 1]]) / 2)
+            start = 0.0 if i == 0 else ap_map.to_ratio((centers[ordered[i - 1]] + centers[a]) / 2)
+            end = 1.0 if i == n - 1 else ap_map.to_ratio((centers[a] + centers[ordered[i + 1]]) / 2)
             layout.append({'area_id': a, 'start': round(start, 4), 'end': round(end, 4)})
         return layout
     return [{'area_id': a, 'start': round(i / n, 4), 'end': round((i + 1) / n, 4)} for i, a in enumerate(area_order)]
@@ -320,21 +421,21 @@ def area_for_ratio(layout, ratio):
     return layout[-1]['area_id'] if layout else None
 
 
-def estimate_positions(latest_reports, ap_pos, area_order, area_rows):
+def estimate_positions(latest_reports, ap_map, area_order, area_rows):
     """デバイスごとの推定位置を返す。
     戻り値: (positions, layout)
       positions: {device_id: {'distance_m', 'ratio', 'area_id', 'samples', 'approx'}}（推定できないデバイスは含まない）
-        approx=True は AP位置設定では位置が出せず、エリア割当の BSSID 一致だけで決めたもの（ratio はエリアの中央）
+        approx=True は AP の距離では位置が出せず、エリア割当の BSSID 一致だけで決めたもの（ratio はエリアの中央）
       layout: build_area_layout の結果
 
     エリアの決め方（上ほど優先）:
-      1. 全エリアの BSSID が AP位置設定にある → 平滑化した距離に最も近いエリア
+      1. 全エリアの BSSID の距離が分かる → 平滑化した距離に最も近いエリア
       2. 最新レポートの mac01 / mac02 がエリア割当の BSSID と一致 → そのエリア（従来のエリアボードの方式）
       3. 平滑化した距離でトンネルを等分したエリア（従来のトンネルマップの方式）"""
-    centers = area_centers_m(area_rows, ap_pos)
-    layout = build_area_layout(area_order, centers)
+    centers = area_centers_m(area_rows, ap_map)
+    layout = build_area_layout(area_order, centers, ap_map)
     centered = bool(layout) and all(a in centers for a in area_order)
-    bssid_area = {row['bssid']: row['area_id'] for row in (area_rows or []) if row.get('bssid') and row.get('area_id')}
+    bssid_area = {norm_mac(row['bssid']): row['area_id'] for row in (area_rows or []) if row.get('bssid') and row.get('area_id')}
     segment = {seg['area_id']: seg for seg in layout}
 
     history = {}
@@ -353,7 +454,7 @@ def estimate_positions(latest_reports, ap_pos, area_order, area_rows):
         rows = history.get(did) or [latest]
         samples = []
         for row in rows[:SMOOTHING_MAX_SAMPLES]:
-            d = report_distance_m(row, ap_pos)
+            d = report_distance_m(row, ap_map)
             if d is None:
                 continue
             ts = parse_ts(row.get('created_at'))
@@ -362,10 +463,10 @@ def estimate_positions(latest_reports, ap_pos, area_order, area_rows):
                 continue
             samples.append((d, age))
 
-        direct_area = bssid_area.get(latest.get('mac01')) or bssid_area.get(latest.get('mac02'))
+        direct_area = bssid_area.get(norm_mac(latest.get('mac01'))) or bssid_area.get(norm_mac(latest.get('mac02')))
 
         # 最新レポートで AP が分からない時に、古い位置で表示し続けない
-        if report_distance_m(latest, ap_pos) is None or not samples:
+        if report_distance_m(latest, ap_map) is None or not samples:
             seg = segment.get(direct_area)
             if seg is None:
                 continue
@@ -378,14 +479,14 @@ def estimate_positions(latest_reports, ap_pos, area_order, area_rows):
             }
             continue
 
-        distance = smooth_distance_m(samples)
-        ratio = to_ratio(distance)
+        distance = smooth_distance_m(samples, ap_map.outlier_m)
+        ratio = ap_map.to_ratio(distance)
         if centered or not direct_area:
             area_id = area_for_ratio(layout, ratio)
         else:
             area_id = direct_area
         positions[did] = {
-            'distance_m': round(distance, 2),
+            'distance_m': round(distance, 1),
             'ratio': round(ratio, 4),
             'area_id': area_id,
             'samples': len(samples),
@@ -397,12 +498,11 @@ def estimate_positions(latest_reports, ap_pos, area_order, area_rows):
 # ==========================================
 #  火災位置
 # ==========================================
-# 火災までの距離がこれ以内なら「すぐ近く」（位置推定の誤差が約1〜2mのため）
-FIRE_NEAR_M = 2.0
-
-
-def ratio_to_distance_m(ratio):
-    return TUNNEL_START_M + max(0.0, min(1.0, ratio)) * (TUNNEL_END_M - TUNNEL_START_M)
+# 火災までの距離が「AP 間隔 × FIRE_NEAR_SPACINGS」以内なら「すぐ近く」（100m 間隔なら 50m）。
+# 位置推定の誤差は AP 間隔の 2 割前後あるため、これより細かく分けても意味がない。
+FIRE_NEAR_SPACINGS = 0.5
+# ウォッチに出す距離の丸め単位（推定誤差より細かい数字を見せない）
+FIRE_DISTANCE_STEP_M = 10.0
 
 
 def load_fire_location():
@@ -418,19 +518,19 @@ def load_fire_location():
     return {'active': True, 'distance_m': float(row['distance_m']), 'updated_at': row.get('updated_at')}
 
 
-def fire_relation(worker_m, fire_m):
+def fire_relation(worker_m, fire_m, near_m):
     """作業者から見た火災の方向と距離。
     direction: 'inward'（奥側）/ 'outward'（入口側）/ 'near'（すぐ近く）"""
     diff = fire_m - worker_m
-    distance = round(abs(diff), 1)
-    if abs(diff) <= FIRE_NEAR_M:
+    distance = round(abs(diff) / FIRE_DISTANCE_STEP_M) * FIRE_DISTANCE_STEP_M
+    if abs(diff) <= near_m:
         return 'near', distance, f"火災: すぐ近く（約{distance:.0f}m）"
     if diff > 0:
         return 'inward', distance, f"火災: 奥 約{distance:.0f}m"
     return 'outward', distance, f"火災: 手前 約{distance:.0f}m"
 
 
-def build_fire_alerts(device_ids, positions, fire):
+def build_fire_alerts(device_ids, positions, fire, ap_map):
     """device_fire_alerts に書く行 {device_id: row}。
     位置が分からないデバイスは direction='unknown'（火災が出ていることだけ知らせる）"""
     alerts = {}
@@ -448,8 +548,8 @@ def build_fire_alerts(device_ids, positions, fire):
             if pos is None:
                 row.update(direction='unknown', message='火災発生: 位置不明。管理者の指示に従ってください')
             else:
-                worker_m = pos['distance_m'] if pos['distance_m'] is not None else ratio_to_distance_m(pos['ratio'])
-                direction, distance, message = fire_relation(worker_m, fire['distance_m'])
+                worker_m = pos['distance_m'] if pos['distance_m'] is not None else ap_map.from_ratio(pos['ratio'])
+                direction, distance, message = fire_relation(worker_m, fire['distance_m'], ap_map.near_m)
                 row.update(direction=direction, distance_m=distance, message=message, approx=bool(pos['approx']))
         alerts[did] = row
     return alerts
@@ -483,11 +583,11 @@ def sync_device_fire_alerts(alerts):
         print(f"Error syncing device_fire_alerts: {e}")
 
 
-def update_fire_alerts(reports, positions, fire):
+def update_fire_alerts(reports, positions, fire, ap_map):
     """最新レポートのある全デバイスと登録ユーザーの device_fire_alerts を最新化し、alerts を返す"""
     device_ids = {r.get('device_id') for r in (reports or []) if r.get('device_id')}
     device_ids |= {u.get('device_id') for u in (load_user_table() or []) if u.get('device_id')}
-    alerts = build_fire_alerts(sorted(device_ids), positions, fire)
+    alerts = build_fire_alerts(sorted(device_ids), positions, fire, ap_map)
     sync_device_fire_alerts(alerts)
     return alerts
 
@@ -762,13 +862,118 @@ def handle_ap_presets():
             return jsonify({'error': str(e)}), 500
 
 
+# ==========================================
+#  ESP32 AP（firmware/esp32s3_ap）
+# ==========================================
+# ESP32 が送る heartbeat の共有トークン（環境変数 AP_SHARED_TOKEN。firmware の AP_TOKEN と同じ値）。
+# 未設定なら heartbeat を受け付けない。
+AP_SHARED_TOKEN = os.environ.get("AP_SHARED_TOKEN", "")
+_MAC_RE = re.compile(r'^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$')
+
+
+@app.route('/api/ap_heartbeat', methods=['POST'])
+def ap_heartbeat():
+    """ESP32 AP が 30 秒ごとに送る。ログイン不要の代わりに X-AP-Token ヘッダーで認証する。
+    初回は ap_nodes に行を作り、firmware に書いた label / distance_m を初期値にする。
+    2回目以降は稼働情報だけ更新する（管理画面で直した label / distance_m / enabled は上書きしない）。"""
+    if not AP_SHARED_TOKEN:
+        return jsonify({'error': 'heartbeat is disabled (AP_SHARED_TOKEN not set)'}), 503
+    token = request.headers.get('X-AP-Token', '')
+    if not hmac.compare_digest(token, AP_SHARED_TOKEN):
+        return jsonify({'error': 'invalid token'}), 401
+
+    data = request.get_json(silent=True) or {}
+    mac = str(data.get('mac') or '').upper()
+    if not _MAC_RE.match(mac):
+        return jsonify({'error': 'mac は AA:BB:CC:DD:EE:FF 形式で指定してください'}), 400
+
+    def as_int(key):
+        try:
+            return int(data[key]) if data.get(key) is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    payload = {
+        'mac': mac,
+        'last_seen': now_iso(),
+        'fw': str(data.get('fw') or '')[:32] or None,
+        'uptime_s': as_int('uptime_s'),
+        'sta_count': as_int('sta_count'),
+        'tx_power_dbm': data.get('tx_power_dbm') if isinstance(data.get('tx_power_dbm'), (int, float)) else None,
+        'channel': as_int('channel'),
+        'uplink_rssi': as_int('uplink_rssi'),
+    }
+    try:
+        existing = supabase.table(TABLE_AP_NODES).select("mac").eq("mac", mac).execute().data
+        if not existing:
+            payload['label'] = str(data.get('label') or '')[:32] or None
+            d = data.get('distance_m')
+            payload['distance_m'] = float(d) if isinstance(d, (int, float)) else None
+            payload['enabled'] = True
+        supabase.table(TABLE_AP_NODES).upsert(payload).execute()
+    except Exception as e:
+        print(f"Error saving ap heartbeat {mac}: {e}")
+        return jsonify({'error': 'heartbeat の保存に失敗しました'}), 500
+    return jsonify({'message': 'ok', 'registered': not existing})
+
+
+@app.route('/api/ap_nodes', methods=['GET', 'POST', 'DELETE'])
+@login_required
+def handle_ap_nodes():
+    """ESP32 AP の一覧と設定。GET は online（heartbeat が AP_NODE_ONLINE_SEC 以内）付き。
+    POST {mac, label?, distance_m?, enabled?} で設定を変更、DELETE {mac} で削除（動いていれば次の heartbeat で再登録される）"""
+    if request.method == 'GET':
+        nodes = sorted(load_ap_nodes(), key=lambda n: (n.get('distance_m') is None, n.get('distance_m') or 0, n.get('mac')))
+        for n in nodes:
+            n['online'] = is_recent(n.get('last_seen'), AP_NODE_ONLINE_SEC)
+        return jsonify(nodes)
+
+    data = request.json or {}
+    mac = str(data.get('mac') or '').upper()
+    if not _MAC_RE.match(mac):
+        return jsonify({'error': 'mac を指定してください'}), 400
+
+    if request.method == 'DELETE':
+        try:
+            supabase.table(TABLE_AP_NODES).delete().eq('mac', mac).execute()
+            return jsonify({'message': 'deleted'})
+        except Exception as e:
+            print(f"Error deleting ap node {mac}: {e}")
+            return jsonify({'error': '削除に失敗しました'}), 500
+
+    update = {}
+    if 'label' in data:
+        update['label'] = (str(data.get('label') or '').strip()[:32]) or None
+    if 'distance_m' in data:
+        d = data.get('distance_m')
+        if d in (None, ''):
+            update['distance_m'] = None
+        else:
+            try:
+                update['distance_m'] = float(d)
+            except (TypeError, ValueError):
+                return jsonify({'error': 'distance_m は数値（入口からの m）で指定してください'}), 400
+            if update['distance_m'] < 0:
+                return jsonify({'error': 'distance_m は 0 以上にしてください'}), 400
+    if 'enabled' in data:
+        update['enabled'] = bool(data.get('enabled'))
+    if not update:
+        return jsonify({'error': '変更する項目がありません'}), 400
+    try:
+        supabase.table(TABLE_AP_NODES).update(update).eq('mac', mac).execute()
+        return jsonify({'message': 'saved'})
+    except Exception as e:
+        print(f"Error updating ap node {mac}: {e}")
+        return jsonify({'error': '保存に失敗しました'}), 500
+
+
 @app.route('/api/wifi_map', methods=['GET'])
 @login_required
 def get_wifi_map():
     reports = load_wifi_reports()
-    ap_pos = load_ap_positions()
+    ap_map = load_ap_map()
     area_order = load_area_order()
-    positions, layout = estimate_positions(reports, ap_pos, area_order, load_area_table())
+    positions, layout = estimate_positions(reports, ap_map, area_order, load_area_table())
 
     user_map = {u['device_id']: u['username'] for u in (load_user_table() or []) if u.get('device_id') and u.get('username')}
     instruction_map = sync_device_reports_from_wifi(reports)
@@ -781,7 +986,7 @@ def get_wifi_map():
 
     # 火災位置が出ていれば、各ウォッチ向けの「自分から見た火災の方向」を更新する
     fire = load_fire_location()
-    alerts = update_fire_alerts(reports, positions, fire)
+    alerts = update_fire_alerts(reports, positions, fire, ap_map)
 
     workers = []
     for row in (reports or []):
@@ -806,17 +1011,15 @@ def get_wifi_map():
         'workers': workers,
         'ap_count': AP_COUNT,
         'ap_labels': AP_LABELS,
-        'ap_markers': [
-            {'label': label, 'distance_m': d, 'ratio': round(to_ratio(d), 4)}
-            for label, d in zip(AP_LABELS, AP_DISTANCES_M)
-        ],
+        'ap_markers': ap_map.markers(),
+        'ap_spacing_m': ap_map.spacing,
         'area_order': area_order,
         'area_layout': layout,
         'online_device_ids': online_device_ids,
         'fire': {
             'active': fire['active'],
             'distance_m': fire['distance_m'],
-            'ratio': round(to_ratio(fire['distance_m']), 4) if fire['active'] else None,
+            'ratio': round(ap_map.to_ratio(fire["distance_m"]), 4) if fire['active'] else None,
         },
     })
 
@@ -829,16 +1032,17 @@ def handle_fire_location():
     if request.method == 'GET':
         return jsonify(load_fire_location())
 
+    ap_map = load_ap_map()
     if request.method == 'POST':
         data = request.json or {}
         try:
             if data.get('distance_m') is not None:
                 distance = float(data['distance_m'])
             else:
-                distance = ratio_to_distance_m(float(data['ratio']))
+                distance = ap_map.from_ratio(float(data['ratio']))
         except (KeyError, TypeError, ValueError):
             return jsonify({'error': 'ratio（0〜1）か distance_m を数値で指定してください'}), 400
-        distance = round(max(TUNNEL_START_M, min(TUNNEL_END_M, distance)), 1)
+        distance = round(ap_map.clamp(distance))
         payload = {'id': 1, 'active': True, 'distance_m': distance, 'updated_at': now_iso()}
     else:
         payload = {'id': 1, 'active': False, 'distance_m': None, 'updated_at': now_iso()}
@@ -851,8 +1055,8 @@ def handle_fire_location():
         return jsonify({'error': '火災位置の保存に失敗しました（supabase/fire_location.sql は実行済みですか？）'}), 500
 
     reports = load_wifi_reports()
-    positions, _ = estimate_positions(reports, load_ap_positions(), load_area_order(), load_area_table())
-    update_fire_alerts(reports, positions, load_fire_location())
+    positions, _ = estimate_positions(reports, ap_map, load_area_order(), load_area_table())
+    update_fire_alerts(reports, positions, load_fire_location(), ap_map)
     return jsonify({'message': 'fire location saved', 'fire': load_fire_location()})
 
 
@@ -922,7 +1126,7 @@ def Location_estimation():
     dev_info = load_wifi_reports() or []
 
     try:
-        positions, _ = estimate_positions(dev_info, load_ap_positions(), load_area_order(), load_area_table())
+        positions, _ = estimate_positions(dev_info, load_ap_map(), load_area_order(), load_area_table())
 
         user_dict = {}
         for item in (load_user_table() or []):
@@ -953,7 +1157,7 @@ def test_deploy():
 def do_entry_status_update():
     """AP位置設定(ap_positions)に登録されたAPのいずれかと接続中は入場中、
     そのどれとも接続できなくなったら退場とみなして entry_current / entry_log を更新する"""
-    ap_pos = load_ap_positions()
+    ap_map = load_ap_map()
     reports = load_wifi_reports() or []
     user_map = {
         u['device_id']: u['username']
@@ -976,7 +1180,7 @@ def do_entry_status_update():
             continue
         mac1 = row.get('mac01') or ''
         mac2 = row.get('mac02') or ''
-        at_entry = bool(ap_pos) and (mac1 in ap_pos or mac2 in ap_pos)
+        at_entry = bool(ap_map) and (mac1 in ap_map or mac2 in ap_map)
 
         prev = current_status.get(device_id, {})
         prev_status = prev.get('status', 'out')
@@ -1066,6 +1270,7 @@ def debug_wifi_map():
             "area_order_raw":     ao_raw.data,
             "load_wifi_reports":  wifi_reports,
             "load_ap_positions":  ap_pos,
+            "load_ap_map":        load_ap_map().entries,
             "load_area_order":    area_order,
         })
     except Exception as e:

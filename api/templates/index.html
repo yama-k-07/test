@@ -49,6 +49,7 @@
         <li><span class="legend-dot legend-approx"></span>エリアのみ判明</li>
         <li><span class="legend-tag">待て</span>出している指示</li>
         <li><span class="legend-fire"></span>火災位置</li>
+        <li><span class="legend-ap-off"></span>停止中の ESP32 AP</li>
       </ul>
     </section>
 
@@ -104,7 +105,7 @@
 
       <section class="box column-box">
         <h2 class="subtitle">AP位置設定</h2>
-        <p class="section-hint">APのMACアドレスとトンネル内の位置番号（0=入口1m 〜 5=奥11m）を対応付けてください。</p>
+        <p class="section-hint">APのMACアドレスと設置場所を対応付けてください（AP1=入口0m 〜 AP11=奥500m、100m間隔）。</p>
 
         <div class="field has-addons">
           <div class="control is-expanded">
@@ -189,6 +190,27 @@
       </section>
 
     </div>
+
+    <section class="box">
+      <h2 class="subtitle">ESP32 AP</h2>
+      <p class="section-hint">ESP32 は電源を入れると自動で登録されます（上り回線がある場合）。入口からの距離を入れて「保存」すると位置推定に使われます。30 秒ごとに稼働状況が更新されます。</p>
+      <div class="table-container">
+        <table class="table is-fullwidth">
+          <thead>
+            <tr>
+              <th>状態</th>
+              <th>表示名</th>
+              <th>BSSID</th>
+              <th>入口からの距離 [m]</th>
+              <th>位置推定</th>
+              <th>最終通信</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody id="apNodesTableBody"></tbody>
+        </table>
+      </div>
+    </section>
 
 
     <footer class="footer">
