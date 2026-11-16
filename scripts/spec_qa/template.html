@@ -1,0 +1,481 @@
+<title>まもっち 仕様Q&amp;A</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DotGothic16&family=Noto+Sans+JP:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
+<style>
+/* Layout: one column workbench — header strip, tab bar, then either the chat (question box pinned under the thread) or a rendered document. Dashboard identity: dot-font headings, square pixel frames, hard offset shadows. */
+:root {
+  --bg: #e6ecef;
+  --surface: #f8faf8;
+  --ink: #194c22;
+  --ink-sub: #4a6451;
+  --frame: rgba(25, 76, 34, 0.72);
+  --shadow: rgba(25, 76, 34, 0.14);
+  --rule: rgba(25, 76, 34, 0.2);
+  --tint: rgba(45, 150, 16, 0.09);
+  --accent: #1a64c4;
+  --accent-ink: #ffffff;
+  --user-bg: #dfeee0;
+  --warn: #8a5300;
+  --danger: #c62828;
+  --code-bg: #10241a;
+  --code-fg: #d8efdc;
+  --font-dot: 'DotGothic16', 'Noto Sans JP', sans-serif;
+  --font-body: 'Noto Sans JP', 'Hiragino Sans', 'Yu Gothic', sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0d1711; --surface: #142219; --ink: #d6ead9; --ink-sub: #a3bfaa;
+    --frame: rgba(150, 205, 160, 0.55); --shadow: rgba(0, 0, 0, 0.45); --rule: rgba(150, 205, 160, 0.2);
+    --tint: rgba(95, 194, 58, 0.12); --accent: #6aaaf5; --accent-ink: #0d1711; --user-bg: #1d3324;
+    --warn: #e0a54a; --danger: #ff6f60; --code-bg: #08110c; --code-fg: #d8efdc;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0d1711; --surface: #142219; --ink: #d6ead9; --ink-sub: #a3bfaa;
+  --frame: rgba(150, 205, 160, 0.55); --shadow: rgba(0, 0, 0, 0.45); --rule: rgba(150, 205, 160, 0.2);
+  --tint: rgba(95, 194, 58, 0.12); --accent: #6aaaf5; --accent-ink: #0d1711; --user-bg: #1d3324;
+  --warn: #e0a54a; --danger: #ff6f60; --code-bg: #08110c; --code-fg: #d8efdc;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+body {
+  background: var(--bg);
+  background-image: radial-gradient(var(--rule) 1px, transparent 1px);
+  background-size: 22px 22px;
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 15px;
+  line-height: 1.7;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 20px 40px;
+}
+.wrap { max-width: 980px; margin: 0 auto; display: grid; gap: 16px; }
+h1, h2, h3 { font-family: var(--font-dot); font-weight: 400; text-wrap: balance; }
+:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+
+.frame { background: var(--surface); border: 3px solid var(--frame); box-shadow: 6px 6px 0 var(--shadow); min-width: 0; }
+
+/* header */
+.head { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; padding: 14px 18px; }
+.head img { height: 48px; width: auto; image-rendering: pixelated; }
+.head h1 { margin: 0; font-size: clamp(20px, 3vw, 26px); line-height: 1.3; }
+.head .sub { margin: 2px 0 0; font-size: 13px; color: var(--ink-sub); }
+.head .ver { margin-left: auto; font-size: 12px; color: var(--ink-sub); text-align: right; font-variant-numeric: tabular-nums; }
+
+/* tabs */
+.tabs { display: flex; flex-wrap: wrap; gap: 8px; }
+.tab {
+  font-family: var(--font-dot); font-size: 15px; color: var(--ink); background: var(--surface);
+  border: 3px solid var(--frame); padding: 4px 14px; cursor: pointer; box-shadow: 3px 3px 0 var(--shadow);
+}
+.tab[aria-selected="true"] { background: var(--frame); color: var(--surface); }
+
+/* chat */
+.chat { display: grid; gap: 14px; padding: 16px 18px; }
+.notice { font-size: 13.5px; color: var(--ink-sub); margin: 0; }
+.notice.warn { color: var(--warn); }
+.examples { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip {
+  font-family: var(--font-body); font-size: 13.5px; color: var(--ink); background: var(--tint);
+  border: 2px solid var(--frame); padding: 3px 10px; cursor: pointer; text-align: left;
+}
+.chip:hover { background: var(--user-bg); }
+.thread { display: grid; gap: 12px; }
+.msg { border: 2px solid var(--frame); padding: 10px 14px; min-width: 0; }
+.msg.user { background: var(--user-bg); justify-self: end; max-width: 85%; white-space: pre-wrap; }
+.msg.bot { background: var(--surface); }
+.msg .who { font-family: var(--font-dot); font-size: 12px; color: var(--ink-sub); display: block; margin-bottom: 4px; }
+.msg .activity { font-size: 12.5px; color: var(--ink-sub); font-family: var(--font-mono); margin-top: 6px; }
+.msg .actions { margin-top: 8px; display: flex; gap: 8px; }
+.msg .err { color: var(--danger); font-size: 13.5px; margin-top: 6px; }
+.empty { text-align: center; color: var(--ink-sub); font-size: 14px; padding: 18px 8px; border: 2px dashed var(--rule); }
+
+.composer { display: grid; gap: 8px; }
+.composer label { font-family: var(--font-dot); font-size: 14px; }
+.composer textarea {
+  width: 100%; min-height: 84px; resize: vertical; font: inherit; color: var(--ink); background: var(--bg);
+  border: 3px solid var(--frame); padding: 8px 10px;
+}
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.btn {
+  font-family: var(--font-dot); font-size: 15px; border: 3px solid var(--frame); padding: 4px 16px; cursor: pointer;
+  background: var(--surface); color: var(--ink); box-shadow: 3px 3px 0 var(--shadow);
+}
+.btn.primary { background: var(--accent); color: var(--accent-ink); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn:active:not(:disabled) { transform: translate(2px, 2px); box-shadow: 1px 1px 0 var(--shadow); }
+.btn.small { font-size: 12.5px; padding: 1px 10px; box-shadow: none; border-width: 2px; }
+.hint { font-size: 12.5px; color: var(--ink-sub); }
+
+/* rendered markdown */
+.md { min-width: 0; overflow-wrap: anywhere; }
+.md > :first-child { margin-top: 0; }
+.md > :last-child { margin-bottom: 0; }
+.md h1, .md h2, .md h3, .md h4 { line-height: 1.4; margin: 1.2em 0 0.5em; }
+.md h1 { font-size: 24px; } .md h2 { font-size: 20px; border-bottom: 3px solid var(--frame); padding-bottom: 2px; }
+.md h3 { font-size: 17px; } .md h4 { font-size: 15px; }
+.md p, .md ul, .md ol { margin: 0.5em 0; }
+.md ul, .md ol { padding-left: 1.4em; }
+.md code { font-family: var(--font-mono); font-size: 0.88em; background: var(--tint); padding: 0 4px; }
+.md pre { background: var(--code-bg); color: var(--code-fg); padding: 10px 12px; overflow-x: auto; border: 2px solid var(--frame); }
+.md pre code { background: none; padding: 0; color: inherit; }
+.md table { border-collapse: collapse; font-size: 13.5px; display: block; overflow-x: auto; max-width: 100%; }
+.md th, .md td { border: 1px solid var(--rule); padding: 4px 8px; text-align: left; vertical-align: top; }
+.md th { background: var(--tint); font-weight: 700; }
+.md blockquote { margin: 0.6em 0; padding: 4px 12px; border-left: 4px solid var(--frame); color: var(--ink-sub); }
+.md a { color: var(--accent); }
+
+.doc { padding: 18px 22px; }
+.doc-tools { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
+.doc-tools input {
+  font: inherit; color: var(--ink); background: var(--bg); border: 2px solid var(--frame); padding: 3px 8px; min-width: 0; flex: 1 1 220px;
+}
+mark { background: #ffe58a; color: #1a1a1a; }
+
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
+
+<main class="wrap">
+  <header class="frame head">
+    <img src="__BANNER__" alt="まもっち">
+    <div>
+      <h1>仕様Q&amp;A</h1>
+      <p class="sub">まもっちの仕様書（SPEC.md）・開発ガイド（AGENTS.md）・ソースコードをもとに Claude が答えます</p>
+    </div>
+    <div class="ver" id="ver"></div>
+  </header>
+
+  <nav class="tabs" role="tablist" aria-label="表示の切り替え">
+    <button class="tab" role="tab" id="tab-ask" aria-selected="true" aria-controls="panel-ask">質問する</button>
+    <button class="tab" role="tab" id="tab-spec" aria-selected="false" aria-controls="panel-spec">仕様書を読む</button>
+    <button class="tab" role="tab" id="tab-guide" aria-selected="false" aria-controls="panel-guide">開発ガイドを読む</button>
+  </nav>
+
+  <section class="frame chat" id="panel-ask" role="tabpanel" aria-labelledby="tab-ask">
+    <p class="notice" id="askNotice">準備中…</p>
+    <div class="examples" id="examples" aria-label="質問の例"></div>
+    <div class="thread" id="thread" aria-live="polite">
+      <div class="empty" id="emptyThread">上の例を押すか、下に質問を書いて「質問する」を押してください。答えには根拠のファイルと関数名が付きます。</div>
+    </div>
+    <form class="composer" id="composer">
+      <label for="question">質問</label>
+      <textarea id="question" placeholder="例: ESP32 AP を 50m 間隔で並べたいとき、どこを設定すればいい？"></textarea>
+      <div class="row">
+        <button class="btn primary" type="submit" id="askBtn">質問する</button>
+        <button class="btn" type="button" id="stopBtn" hidden>止める</button>
+        <button class="btn" type="button" id="resetBtn">会話をリセット</button>
+        <span class="hint">Ctrl + Enter でも送信できます。質問はあなたの Claude の利用枠を使います。</span>
+      </div>
+    </form>
+  </section>
+
+  <section class="frame doc" id="panel-spec" role="tabpanel" aria-labelledby="tab-spec" hidden>
+    <div class="doc-tools">
+      <input type="search" id="specFind" placeholder="仕様書の中を探す（例: heartbeat）" aria-label="仕様書の中を探す">
+      <span class="hint" id="specFindCount"></span>
+    </div>
+    <div class="md" id="specBody"></div>
+  </section>
+
+  <section class="frame doc" id="panel-guide" role="tabpanel" aria-labelledby="tab-guide" hidden>
+    <div class="md" id="guideBody"></div>
+  </section>
+</main>
+
+<script type="application/json" id="bundle">__BUNDLE__</script>
+<script>
+(function () {
+  "use strict";
+  const BUNDLE = JSON.parse(document.getElementById("bundle").textContent);
+  const FILES = BUNDLE.files;            // { path: text } — SPEC.md / AGENTS.md / ソース
+  const PATHS = Object.keys(FILES);
+
+  // ---------- 共通 ----------
+  const $ = (id) => document.getElementById(id);
+  const hasMd = typeof window.marked !== "undefined" && typeof window.DOMPurify !== "undefined";
+  function renderMarkdown(el, text) {
+    if (hasMd) {
+      el.innerHTML = window.DOMPurify.sanitize(window.marked.parse(text, { gfm: true, breaks: false }));
+      el.querySelectorAll("a[href^='http']").forEach(a => { a.target = "_blank"; a.rel = "noopener"; });
+    } else {
+      el.textContent = text;
+      el.style.whiteSpace = "pre-wrap";
+    }
+  }
+  $("ver").textContent = "元にしたコミット: " + BUNDLE.revision + "\n作成: " + BUNDLE.generated;
+  $("ver").style.whiteSpace = "pre-line";
+
+  // ---------- タブ ----------
+  const tabs = [["tab-ask", "panel-ask"], ["tab-spec", "panel-spec"], ["tab-guide", "panel-guide"]];
+  let specRendered = false, guideRendered = false;
+  function showTab(tabId) {
+    for (const [t, p] of tabs) {
+      const on = t === tabId;
+      $(t).setAttribute("aria-selected", String(on));
+      $(p).hidden = !on;
+    }
+    if (tabId === "tab-spec" && !specRendered) { renderMarkdown($("specBody"), FILES["SPEC.md"]); specRendered = true; }
+    if (tabId === "tab-guide" && !guideRendered) { renderMarkdown($("guideBody"), FILES["AGENTS.md"]); guideRendered = true; }
+    try { localStorage.setItem("mamotchi-qa-tab", tabId); } catch (e) { /* 保存できなくても動く */ }
+  }
+  tabs.forEach(([t]) => $(t).addEventListener("click", () => showTab(t)));
+  try { const saved = localStorage.getItem("mamotchi-qa-tab"); if (saved && $(saved)) showTab(saved); } catch (e) {}
+
+  // 仕様書の中を探す（見つかった語に印を付け、最初の場所へ移動）
+  $("specFind").addEventListener("input", () => {
+    const q = $("specFind").value.trim();
+    renderMarkdown($("specBody"), FILES["SPEC.md"]);
+    if (!q) { $("specFindCount").textContent = ""; return; }
+    let count = 0, first = null;
+    const walker = document.createTreeWalker($("specBody"), NodeFilter.SHOW_TEXT);
+    const hits = [];
+    while (walker.nextNode()) {
+      const n = walker.currentNode;
+      if (n.nodeValue.toLowerCase().includes(q.toLowerCase())) hits.push(n);
+    }
+    for (const n of hits) {
+      const lower = n.nodeValue.toLowerCase(), ql = q.toLowerCase();
+      const frag = document.createDocumentFragment();
+      let i = 0, j;
+      while ((j = lower.indexOf(ql, i)) !== -1) {
+        frag.append(n.nodeValue.slice(i, j));
+        const m = document.createElement("mark");
+        m.textContent = n.nodeValue.slice(j, j + q.length);
+        frag.append(m);
+        if (!first) first = m;
+        count++;
+        i = j + q.length;
+      }
+      frag.append(n.nodeValue.slice(i));
+      n.replaceWith(frag);
+    }
+    $("specFindCount").textContent = count ? count + " 件" : "見つかりません";
+    if (first) first.scrollIntoView({ block: "center" });
+  });
+
+  // ---------- Claude に渡す道具（ページ内に埋め込んだファイルを読む） ----------
+  function numbered(path, start, end) {
+    const lines = FILES[path].split("\n");
+    const s = Math.max(1, start), e = Math.min(lines.length, end);
+    const out = [];
+    for (let i = s; i <= e; i++) out.push(i + ": " + lines[i - 1]);
+    return { path, start: s, end: e, total_lines: lines.length, text: out.join("\n") };
+  }
+  const TOOLS = [
+    {
+      name: "list_files",
+      description: "このページに入っているファイル（仕様書・開発ガイド・ソースコード）の一覧と行数を返す。",
+      execute: () => PATHS.map(p => ({ path: p, lines: FILES[p].split("\n").length })),
+    },
+    {
+      name: "search_code",
+      description: "全ファイル（または path で指定した1ファイル）から文字列を探し、一致した行を『パス:行番号: 内容』で最大40件返す。関数名・定数名・API パス・テーブル名を探すのに使う。大文字小文字は区別しない。",
+      inputSchema: { type: "object", properties: { query: { type: "string", description: "探す文字列（正規表現ではない）" }, path: { type: "string", description: "省略可。探すファイルのパス" } }, required: ["query"] },
+      execute: (input) => {
+        const q = String(input.query || "").toLowerCase();
+        if (!q) throw new Error("query が空です");
+        const targets = input.path ? [String(input.path)] : PATHS;
+        const hits = [];
+        for (const p of targets) {
+          if (!FILES[p]) throw new Error("そのファイルはありません: " + p + "（list_files で確認）");
+          FILES[p].split("\n").forEach((line, i) => {
+            if (hits.length < 40 && line.toLowerCase().includes(q)) hits.push(p + ":" + (i + 1) + ": " + line.trim().slice(0, 220));
+          });
+        }
+        return hits.length ? hits.join("\n") : "一致なし";
+      },
+    },
+    {
+      name: "read_file",
+      description: "ファイルの指定した行範囲を行番号付きで返す（1回に最大250行）。search_code で見つけた行の前後を読むのに使う。",
+      inputSchema: { type: "object", properties: { path: { type: "string" }, start_line: { type: "integer" }, end_line: { type: "integer" } }, required: ["path"] },
+      execute: (input) => {
+        const p = String(input.path || "");
+        if (!FILES[p]) throw new Error("そのファイルはありません: " + p + "（list_files で確認）");
+        const start = Math.max(1, Number(input.start_line) || 1);
+        const end = Math.min(start + 249, Number(input.end_line) || start + 149);
+        return numbered(p, start, end);
+      },
+    },
+  ];
+
+  const RULES = [
+    "あなたは「まもっち」プロジェクト（トンネル作業者の位置推定・避難指示ダッシュボード）の仕様について、共同開発者の質問に答える案内役です。",
+    "以下に開発ガイド AGENTS.md と仕様書 SPEC.md の全文を載せます。答えはこれと、道具（search_code / read_file / list_files）で読める実際のソースコードを根拠にしてください。",
+    "",
+    "答え方:",
+    "- 日本語で、結論から短く。その後に根拠を示す。",
+    "- 根拠には必ずファイル名と関数名（必要なら行番号）を書く。例: `api/app.py` の `estimate_positions`（412行目付近）。仕様書なら節番号（SPEC.md §6.3）。",
+    "- 「どこを直せばいいか」と聞かれたら、AGENTS.md §3 の対応表で場所を特定し、実際のコードを read_file で確かめてから、置き換え前／置き換え後をコードブロックで示す。§4 のルールに触れる変更なら先にそう書く。",
+    "- 仕様書とコードが食い違っていたら、コードを正として答え、食い違いがあることも伝える。",
+    "- 書かれていないこと・分からないことは推測で埋めず「仕様書とコードからは分かりません」と答え、誰に確認すべきか（例: ウォッチ側の担当）を添える。",
+    "- 秘密情報（キー・パスワード・トークンの値）は答えない。",
+    "",
+    "===== AGENTS.md =====",
+    FILES["AGENTS.md"],
+    "",
+    "===== SPEC.md =====",
+    FILES["SPEC.md"],
+  ].join("\n");
+
+  // ---------- 質問の画面 ----------
+  const EXAMPLES = [
+    "位置推定はどういう流れで計算している？",
+    "ESP32 AP を 50m 間隔で 11 台並べたい。何をすればいい？",
+    "ウォッチに出る火災の文言を変えたい。どのファイルのどこ？",
+    "ログイン不要の API はどれ？ 塞いでも大丈夫？",
+    "マップに作業者が出ないとき、どこを確認すればいい？",
+  ];
+  EXAMPLES.forEach(q => {
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "chip"; b.textContent = q;
+    b.addEventListener("click", () => { $("question").value = q; ask(); });
+    $("examples").append(b);
+  });
+
+  const ERROR_COPY = {
+    not_granted: "このページが Claude を使うことが許可されていません。質問機能は使えませんが、「仕様書を読む」は使えます。",
+    sampling_disabled: "このアカウントでは Claude を呼び出せません。「仕様書を読む」を使ってください。",
+    rate_limited: "短時間に質問が多すぎるか、利用上限に達しました。しばらく待ってからもう一度押してください。",
+    session_expired: "ログインが切れました。Claude にログインし直してから再度お試しください。",
+    prompt_too_large: "会話が長くなりすぎました。「会話をリセット」してから聞き直してください。",
+    refused: "この質問には答えられませんでした。言い方を変えて聞き直してください。",
+    empty_completion: "答えが空でした。質問を短くして聞き直してください。",
+    upstream_error: "通信が途中で切れました。もう一度「質問する」を押してください。",
+  };
+  const errorCopy = (code) => ERROR_COPY[code] || ERROR_COPY.upstream_error;
+
+  let sample = null, canTools = false, busy = false, ctl = null;
+  const turns = [];   // {role, content} — 画面の会話（指示文は含めない）
+
+  function setBusy(on) {
+    busy = on;
+    $("askBtn").disabled = on;
+    $("stopBtn").hidden = !on;
+    $("resetBtn").disabled = on;
+  }
+
+  function addMessage(role, text) {
+    $("emptyThread").hidden = true;
+    const box = document.createElement("div");
+    box.className = "msg " + (role === "user" ? "user" : "bot");
+    const who = document.createElement("span");
+    who.className = "who";
+    who.textContent = role === "user" ? "あなた" : "Claude";
+    box.append(who);
+    const body = document.createElement("div");
+    if (role === "user") { body.textContent = text; } else { body.className = "md"; body.textContent = text; }
+    box.append(body);
+    $("thread").append(box);
+    box.scrollIntoView({ block: "nearest" });
+    return { box, body };
+  }
+
+  async function ask() {
+    const q = $("question").value.trim();
+    if (!q || busy) return;
+    if (!sample) { $("askNotice").textContent = "質問機能はこの表示環境では使えません。「仕様書を読む」を使ってください。"; return; }
+    $("question").value = "";
+    addMessage("user", q);
+    turns.push({ role: "user", content: q });
+    const { box, body } = addMessage("bot", "考えています…（コードを読む場合は 30〜90 秒ほどかかります）");
+    const activity = document.createElement("div");
+    activity.className = "activity";
+    box.append(activity);
+
+    // 指示文＋直近の会話（古いものから落とす）
+    let history = turns.slice(-10);
+    if (history[0] && history[0].role !== "user") history = history.slice(1);
+    const input = [{ role: "user", content: RULES }, ...history];
+
+    const tools = canTools ? TOOLS.map(t => ({
+      name: t.name, description: t.description, inputSchema: t.inputSchema,
+      execute: (inp, ctx) => {
+        activity.textContent = "読んでいます: " + t.name + (inp && inp.path ? " " + inp.path : "") + (inp && inp.query ? " 「" + inp.query + "」" : "");
+        return t.execute(inp || {}, ctx);
+      },
+    })).map(t => (t.inputSchema ? t : (delete t.inputSchema, t))) : undefined;
+
+    ctl = new AbortController();
+    setBusy(true);
+    try {
+      const opts = { signal: ctl.signal, onText: ({ text }) => renderMarkdown(body, text) };
+      if (tools) opts.tools = tools; else opts.cache = false;
+      const res = await sample(input, opts);
+      renderMarkdown(body, res.text);
+      turns.push({ role: "assistant", content: res.text });
+      activity.textContent = res.truncated ? "答えが長すぎて途中で切れました。質問を分けてください。" : "";
+      addCopyButton(box, res.text);
+    } catch (e) {
+      const code = e && e.code;
+      if (e && e.text && code !== "refused") renderMarkdown(body, e.text); else if (code !== "cancelled") body.textContent = "";
+      activity.textContent = "";
+      if (code === "cancelled") {
+        const note = document.createElement("div"); note.className = "err"; note.textContent = "止めました。"; box.append(note);
+      } else {
+        const note = document.createElement("div"); note.className = "err"; note.textContent = errorCopy(code); box.append(note);
+        if (code === "not_granted" || code === "sampling_disabled" || code === "capability_disabled" || code === "not_declared") disableAsk(errorCopy(code));
+      }
+      turns.pop();   // 答えられなかった質問は会話に残さない
+    } finally {
+      setBusy(false);
+      ctl = null;
+    }
+  }
+
+  function addCopyButton(box, text) {
+    const row = document.createElement("div");
+    row.className = "actions";
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "btn small"; b.textContent = "答えをコピー";
+    b.addEventListener("click", async () => {
+      try { await navigator.clipboard.writeText(text); b.textContent = "コピーしました"; }
+      catch (e) { b.textContent = "コピーできませんでした（選択してコピーしてください）"; }
+    });
+    row.append(b);
+    box.append(row);
+  }
+
+  function disableAsk(message) {
+    sample = null;
+    $("askNotice").textContent = message;
+    $("askNotice").classList.add("warn");
+    $("askBtn").disabled = true;
+  }
+
+  $("composer").addEventListener("submit", (e) => { e.preventDefault(); ask(); });
+  $("question").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); ask(); } });
+  $("stopBtn").addEventListener("click", () => ctl && ctl.abort());
+  $("resetBtn").addEventListener("click", () => {
+    turns.length = 0;
+    $("thread").querySelectorAll(".msg").forEach(m => m.remove());
+    $("emptyThread").hidden = false;
+  });
+
+  // ---------- Claude の準備 ----------
+  $("askBtn").disabled = true;
+  (async () => {
+    const use = window.claude && window.claude.use;
+    sample = use ? await window.claude.use("sample") : null;
+    if (!sample) {
+      disableAsk("この表示環境では質問機能が使えません（Claude のアプリやブラウザで、共有されたリンクから開くと使えます）。「仕様書を読む」「開発ガイドを読む」は使えます。");
+      return;
+    }
+    let limits = null;
+    try { limits = await sample.limits(); } catch (e) { limits = null; }
+    canTools = !!(limits && limits.tools);
+    $("askNotice").textContent = canTools
+      ? "仕様書・開発ガイドに加えて、" + (PATHS.length - 2) + " 個のソースファイルを必要に応じて読んで答えます。最初の質問のときに、Claude の利用の許可を求められます。"
+      : "この表示環境ではソースコードを読めないため、仕様書と開発ガイドだけをもとに答えます。";
+    $("askBtn").disabled = false;
+  })();
+})();
+</script>

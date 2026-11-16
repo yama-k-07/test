@@ -15,6 +15,7 @@ AI はどのファイルのどこを直せばよいかを答えられる。
 import argparse
 import datetime
 import pathlib
+import re
 import subprocess
 import sys
 
@@ -41,6 +42,11 @@ FILES = [
 
 # 絶対に入れないもの（パスワードやキーを含む）
 NEVER = {".env", "config.h"}
+
+# 外部の AI に渡すので、コードに直書きされた秘密の値は伏せる
+REDACTIONS = [
+    (re.compile(r"(app\.secret_key\s*=\s*)(['\"]).*?\2"), r"\1'（伏せ字: 本物の値はリポジトリを参照）'"),
+]
 
 LANG = {".py": "python", ".js": "javascript", ".html": "html", ".css": "css", ".sql": "sql",
         ".ino": "cpp", ".h": "cpp", ".json": "json", ".md": "markdown", ".txt": "text"}
@@ -77,6 +83,8 @@ def main():
             missing.append(rel)
             continue
         text = path.read_text(encoding="utf-8")
+        for pattern, repl in REDACTIONS:
+            text = pattern.sub(repl, text)
         fence = "````" if "```" in text else "```"
         lang = LANG.get(path.suffix, "")
         parts.append(f"## ファイル: `{rel}`\n\n{fence}{lang}\n{text.rstrip()}\n{fence}\n")
