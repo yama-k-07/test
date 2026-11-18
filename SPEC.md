@@ -91,7 +91,7 @@
 | `supabase/fire_location.sql` | | 使用中 | `fire_location` / `device_fire_alerts` の定義 |
 | `supabase/ap_nodes.sql` | | 使用中 | `ap_nodes` の定義 |
 | `firmware/esp32s3_ap/` | 約130（.ino） | 使用中 | ESP32-S3 AP のファームウェア・設定例・README（§8） |
-| `firmware/esp32cam_uplink/` | 約190（.ino） | 使用中 | ESP32 カメラのファームウェア・設定例・README（§8.5） |
+| `firmware/esp32cam_uplink/` | 約280（.ino） | 使用中 | ESP32 カメラのファームウェア・設定例・README（§8.5） |
 | `supabase/cameras.sql` | | 使用中 | `cameras` テーブルと Storage バケット `camera-frames` の定義 |
 | `AGENTS.md` / `CLAUDE.md` | | 説明書 | 開発ガイド（AI・人間共通）。`CLAUDE.md` は AGENTS.md を読み込むだけ |
 | `docs/AI_WORKFLOW.md` | | 説明書 | 共同開発者が生成 AI と開発する手順 |
@@ -478,7 +478,7 @@
 - **画面**: カメラごとにタイル（名前・距離・稼働中/停止・映像・撮影時刻と遅れ）。「映像を見る」を押したタイルだけ取得し、タブが隠れている間は取りに行かない。10 分で自動停止。設定（名前・距離・受け取る/受け取らない・削除）は欄の下の「カメラの設定」
 - **定数**（`app.py`）: `CAMERA_WATCH_SEC=20`、`CAMERA_IDLE_POLL_SEC=10`、`CAMERA_FRAME_INTERVAL_MS=1000`、`CAMERA_ONLINE_SEC=60`、`CAMERA_MAX_FRAME_BYTES=600KB`
 - **近くで見る（任意）**: `ENABLE_LOCAL_VIEW 1` で自分の Wi-Fi も立て（AP+STA）、CameraWebServer の `app_httpd.cpp` の画面を `http://192.168.4.1` で同時に出す。同じカメラを使うので両方見るとコマ数は落ちる
-- **firmware**: 実機は ESP32-S3-EYE（`CAMERA_MODEL_ESP32S3_EYE`、上下反転を補正）。CameraWebServer の `board_config.h` / `camera_pins.h` / `partitions.csv`（と、近くで見るなら `app_httpd.cpp` / `camera_index.h`）をコピーして使う（Git には入れない）。CameraWebServer の RGB565・240×240 から JPEG・VGA に変更。ボード設定は ESP32S3 Dev Module・OPI PSRAM・Custom パーティション。`config.h` に `CAMERA_ID`、Wi-Fi、`AP_TOKEN`、画像サイズ（既定 VGA）と画質（既定 14）。`esp_camera_*` と HTTPClient の API は公式ソースで確認済み。2026-11-18 に Arduino-ESP32 3.3.13（ESP32S3 Dev Module・OPI PSRAM・Custom パーティション）で、近くで見る画面あり（約 1.15MB）・なし（約 1.08MB）の両方とも**コンパイル成功**。実機での動作はまだ確認していない
+- **firmware**: 実機は ESP32-S3-EYE（`CAMERA_MODEL_ESP32S3_EYE`、上下反転を補正）。CameraWebServer の `board_config.h` / `camera_pins.h` / `partitions.csv`（と、近くで見るなら `app_httpd.cpp` / `camera_index.h`）をコピーして使う（Git には入れない）。まず JPEG・VGA で撮り、センサーが JPEG 非対応（`esp_camera_init` が `0x106`）なら RGB565（`RGB_FRAME_SIZE` 既定 QVGA）で撮り直して `frame2jpg`（`RGB_JPEG_QUALITY` 既定 60）で JPEG に変換して送る（FW 1.2.0）。ボード設定は ESP32S3 Dev Module・OPI PSRAM・Custom パーティション。`config.h` に `CAMERA_ID`、Wi-Fi、`AP_TOKEN`、画像サイズ（既定 VGA）と画質（既定 14）。`esp_camera_*` と HTTPClient の API は公式ソースで確認済み。2026-11-18 に Arduino-ESP32 3.3.13（ESP32S3 Dev Module・OPI PSRAM・Custom パーティション）で、近くで見る画面あり（約 1.15MB）・なし（約 1.08MB）の両方とも**コンパイル成功**。同日、実機（ESP32-S3-EYE、センサー PID 0x9b＝JPEG 非対応のため RGB565→JPEG 変換で動作）をテザリング経由でつなぎ、本番ダッシュボードで**映像が見えることを確認**
 - **回線の目安**: 見ている間 1 時間に 70〜180MB、見ていない間は 10 秒ごとの小さな問い合わせだけ
 - **導入**: `supabase/cameras.sql` を実行 → Vercel に `AP_SHARED_TOKEN` → firmware を書き込む（`firmware/esp32cam_uplink/README.md`）
 - サーバー側は Supabase を偽物に差し替えたテスト（20 項目）で、登録・送信の開始と停止・保存・閲覧・認証を確認済み

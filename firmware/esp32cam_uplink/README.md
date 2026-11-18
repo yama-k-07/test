@@ -39,12 +39,14 @@ ESP32 カメラ ──(インターネットにつながる Wi-Fi)──> Vercel
    - Partition Scheme: **Custom**（コピーした `partitions.csv` が使われる）
    - Flash Mode: **QIO**、USB Mode: そのまま
 4. 書き込んでシリアルモニタ（115200bps）を開く
+   - `[CAM] sensor PID 0x..., format JPEG` または `format RGB565 -> JPEG` … どちらの撮り方になったか（下の「JPEG で撮れないカメラ」）
    - `[CAM] ready (PSRAM yes)` … カメラ OK
    - `[LOCAL] SSID=... http://192.168.4.1` … 近くで見る画面 OK（`ENABLE_LOCAL_VIEW 1` のとき）
    - `[POLL] 200 {...}` … サーバーとつながった
 
 ### CameraWebServer からの変更点
-- 画像の形式を **RGB565（顔検出用、240×240）から JPEG（VGA 640×480）** に変えた。クラウドへ送るには JPEG が必要で、近くで見る画面も軽くなる
+- まず **JPEG（VGA 640×480）** で撮ろうとする。クラウドへ送るには JPEG が必要
+- **JPEG で撮れないカメラ**（`esp_camera_init` が `0x106` = ESP_ERR_NOT_SUPPORTED を返すセンサー）は、自動で **RGB565 で撮って本体で JPEG に変換**して送る（`frame2jpg`）。大きさは `RGB_FRAME_SIZE`（既定 QVGA 320×240）、画質は `RGB_JPEG_QUALITY`（既定 60）。実機の ESP32-S3-EYE（センサー PID 0x9b）はこちらで動いている。CameraWebServer のサンプルが RGB565・240×240 だったのはこのため
 - 上下の向きの補正（ESP32-S3-EYE は `set_vflip`）は CameraWebServer と同じ
 - 近くで見る画面と、クラウドへの送信は同じカメラを使う。両方を同時に見ると、それぞれのコマ数は少し落ちる
 
@@ -57,7 +59,7 @@ ESP32 カメラ ──(インターネットにつながる Wi-Fi)──> Vercel
 
 - 見ている間: VGA・画質 14 で 1 枚 20〜50KB × 1 秒ごと ≒ 1 時間に 70〜180MB（カメラの上り・Supabase Storage・閲覧者の下りそれぞれ）
 - 見ていない間: 10 秒ごとの小さな問い合わせだけ
-- 重いときは `config.h` の `FRAME_SIZE` を `FRAMESIZE_QVGA` に、`JPEG_QUALITY` を大きくする
+- 重いときは `config.h` の `FRAME_SIZE` を `FRAMESIZE_QVGA` に、`JPEG_QUALITY` を大きくする（JPEG で撮れないカメラでは `RGB_FRAME_SIZE` を小さく、`RGB_JPEG_QUALITY` を小さく）
 
 ## 注意
 
