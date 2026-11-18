@@ -12,6 +12,11 @@
 #define FRAME_SIZE   FRAMESIZE_VGA   // 640x480。回線が細いなら FRAMESIZE_QVGA（320x240）
 #define JPEG_QUALITY 14              // 10〜20 目安。数字が大きいほど軽い（1 枚 20〜50KB 程度）
 
+// JPEG で撮れないカメラ（起動時に「RGB565 で撮って変換します」と出る）は、こちらの値を使う。
+// 本体で JPEG に変換するので、大きくしすぎると遅く・メモリ不足になる。
+#define RGB_FRAME_SIZE   FRAMESIZE_QVGA  // 320x240（240x240 なら FRAMESIZE_240X240）
+#define RGB_JPEG_QUALITY 60              // 1〜100。こちらは数字が大きいほど高画質・重い
+
 // ---- 近くで見る（今までの http://192.168.4.1）----
 // 1 にすると自分の Wi-Fi も立てて、CameraWebServer の画面（なめらかな映像）も同時に使える。
 // そのときは CameraWebServer の app_httpd.cpp と camera_index.h もこのフォルダにコピーする。

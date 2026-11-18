@@ -23,18 +23,26 @@
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
+#include "img_converters.h"   // frame2jpg（JPEG で撮れないカメラ用）
 #include "board_config.h"   // CameraWebServer からコピー（CAMERA_MODEL_* の選択と camera_pins.h）
 #include "config.h"
 
 #ifndef ENABLE_LOCAL_VIEW
 #define ENABLE_LOCAL_VIEW 0
 #endif
+// JPEG で撮れないカメラ用（config.h に無ければこの値）
+#ifndef RGB_FRAME_SIZE
+#define RGB_FRAME_SIZE FRAMESIZE_QVGA   // 320x240。RGB565 は 1 コマが大きいので小さめにする
+#endif
+#ifndef RGB_JPEG_QUALITY
+#define RGB_JPEG_QUALITY 60             // frame2jpg の画質（0〜100、大きいほど高画質・大容量）
+#endif
 #if ENABLE_LOCAL_VIEW
 void startCameraServer();   // app_httpd.cpp
 void setupLedFlash();       // app_httpd.cpp
 #endif
 
-static const char *FW_VERSION = "1.1.0";
+static const char *FW_VERSION = "1.2.0";
 static const uint32_t WIFI_RETRY_MS = 10 * 1000;
 
 static WiFiClientSecure tls;
@@ -87,6 +95,13 @@ static bool initCamera() {
 #endif
 
   esp_err_t err = esp_camera_init(&config);
+  if (err == ESP_ERR_NOT_SUPPORTED) {
+    // JPEG で撮れない撮像素子（ESP32-S3-EYE の一部など）。RGB565 で撮り、送るときに JPEG に変換する
+    Serial.println("[CAM] このカメラは JPEG で撮れないため、RGB565 で撮って変換します");
+    config.pixel_format = PIXFORMAT_RGB565;
+    config.frame_size = RGB_FRAME_SIZE;       // config.h（既定 QVGA 320x240）
+    err = esp_camera_init(&config);
+  }
   if (err != ESP_OK) {
     Serial.printf("[CAM] init failed 0x%x\n", err);
     return false;
@@ -94,6 +109,8 @@ static bool initCamera() {
 
   // 向きと色の補正（CameraWebServer の setup() と同じ）
   sensor_t *s = esp_camera_sensor_get();
+  Serial.printf("[CAM] sensor PID 0x%x, format %s\n", s->id.PID,
+                config.pixel_format == PIXFORMAT_JPEG ? "JPEG" : "RGB565 -> JPEG");
   if (s->id.PID == OV3660_PID) {
     s->set_vflip(s, 1);
     s->set_brightness(s, 1);
@@ -170,17 +187,33 @@ static void sendFrame() {
     Serial.println("[CAM] capture failed");
     return;
   }
-  HTTPClient http;
-  if (!beginRequest(http, String("/api/camera_frame?camera_id=") + CAMERA_ID)) {
-    esp_camera_fb_return(fb);
-    return;
-  }
-  http.addHeader("Content-Type", "image/jpeg");
-  http.addHeader("X-Frame-Width", String(fb->width));
-  http.addHeader("X-Frame-Height", String(fb->height));
-  int code = http.POST(fb->buf, fb->len);
+
+  // JPEG で撮れないカメラは、ここで JPEG に変換する（app_httpd.cpp の stream_handler と同じ frame2jpg）
+  uint8_t *jpg = fb->buf;
   size_t len = fb->len;
-  esp_camera_fb_return(fb);
+  uint8_t *converted = NULL;
+  size_t width = fb->width, height = fb->height;
+  if (fb->format != PIXFORMAT_JPEG) {
+    bool ok = frame2jpg(fb, RGB_JPEG_QUALITY, &converted, &len);
+    esp_camera_fb_return(fb);
+    fb = NULL;
+    if (!ok) {
+      Serial.println("[CAM] JPEG 変換に失敗");
+      return;
+    }
+    jpg = converted;
+  }
+
+  HTTPClient http;
+  int code = -1;
+  if (beginRequest(http, String("/api/camera_frame?camera_id=") + CAMERA_ID)) {
+    http.addHeader("Content-Type", "image/jpeg");
+    http.addHeader("X-Frame-Width", String(width));
+    http.addHeader("X-Frame-Height", String(height));
+    code = http.POST(jpg, len);
+  }
+  if (fb) esp_camera_fb_return(fb);
+  if (converted) free(converted);
   String res = code > 0 ? http.getString() : "";
   http.end();
   Serial.printf("[FRAME] %u bytes -> %d\n", (unsigned)len, code);
