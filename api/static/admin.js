@@ -942,6 +942,7 @@ document.addEventListener('DOMContentLoaded', () => {
   loadApPositionsTable();
   loadApPresetList();
   loadApNodesTable();
+  loadCameras();
   loadEntryManagement();
   initTunnelMapInteraction();
 
@@ -952,6 +953,7 @@ document.addEventListener('DOMContentLoaded', () => {
     loadUserTable();
     loadEntryManagement();
     loadApNodesTable();
+    loadCameras();
     loadTunnelMap();
   }, 5000);
 });
@@ -1610,6 +1612,249 @@ async function deleteApNode(button) {
   lastApNodesSig = null;
   loadApNodesTable();
   loadTunnelMap();
+}
+
+
+// ======== カメラ（ESP32 カメラのコマ送り映像） ========
+// 「映像を見る」を押したカメラだけ、/api/camera_frame/<id> を 1 秒ごとに取りに行く。
+// 取りに行くこと自体が「見ている」合図で、サーバーがカメラに送信を指示する（app.py の camera_frame_view）。
+const CAMERA_FRAME_INTERVAL_MS = 1000;
+const CAMERA_AUTO_STOP_MS = 10 * 60 * 1000;
+let lastCamerasSig = null;
+const cameraViewers = {};   // camera_id -> { timer, objectUrl, startedAt, stopped }
+
+async function loadCameras() {
+  const grid = document.getElementById('cameraGrid');
+  if (!grid) return;
+
+  let cameras;
+  try {
+    const res = await fetch('/api/cameras');
+    if (!res.ok) {
+      console.error('loadCameras: APIエラー', res.status);
+      return;
+    }
+    cameras = await res.json();
+  } catch (e) {
+    console.error('loadCameras fetch error:', e);
+    return;
+  }
+  if (!Array.isArray(cameras)) return;
+
+  const sig = JSON.stringify(cameras.map(c => [c.camera_id, c.label, c.distance_m, c.online, c.enabled, c.wifi_rssi]));
+  if (sig === lastCamerasSig) return;
+  lastCamerasSig = sig;
+
+  renderCameraTiles(grid, cameras);
+  if (!isEditing) renderCameraSettings(cameras);
+}
+
+function renderCameraTiles(grid, cameras) {
+  if (cameras.length === 0) {
+    Object.keys(cameraViewers).forEach(stopCameraView);
+    grid.innerHTML = '<p class="camera-empty">まだカメラが登録されていません（firmware/esp32cam_uplink を書き込んで電源を入れると表示されます）</p>';
+    return;
+  }
+  grid.querySelector('.camera-empty')?.remove();
+
+  const ids = new Set(cameras.map(c => c.camera_id));
+  grid.querySelectorAll('.camera-tile').forEach(tile => {
+    if (!ids.has(tile.dataset.cameraId)) {
+      stopCameraView(tile.dataset.cameraId);
+      tile.remove();
+    }
+  });
+
+  cameras.forEach(cam => {
+    let tile = grid.querySelector(`.camera-tile[data-camera-id="${CSS.escape(cam.camera_id)}"]`);
+    if (!tile) {
+      tile = document.createElement('div');
+      tile.className = 'camera-tile';
+      tile.dataset.cameraId = cam.camera_id;
+      tile.innerHTML = `
+        <div class="camera-head">
+          <strong class="camera-label"></strong>
+          <span class="entry-badge camera-badge"></span>
+        </div>
+        <div class="camera-view">
+          <img class="camera-img" alt="" hidden>
+          <p class="camera-placeholder">「映像を見る」を押すと表示します</p>
+        </div>
+        <div class="camera-foot">
+          <button type="button" class="button is-small is-link camera-toggle">映像を見る</button>
+          <span class="camera-info"></span>
+        </div>
+      `;
+      tile.querySelector('.camera-toggle').addEventListener('click', () => {
+        if (cameraViewers[cam.camera_id] && !cameraViewers[cam.camera_id].stopped) stopCameraView(cam.camera_id);
+        else startCameraView(cam.camera_id);
+      });
+      grid.appendChild(tile);
+    }
+    const distance = cam.distance_m === null || cam.distance_m === undefined ? '' : `（入口から ${Math.round(cam.distance_m)}m）`;
+    tile.querySelector('.camera-label').textContent = (cam.label || cam.camera_id) + distance;
+    const badge = tile.querySelector('.camera-badge');
+    const usable = cam.online && cam.enabled !== false;
+    badge.textContent = cam.enabled === false ? '無効' : (cam.online ? '稼働中' : '停止');
+    badge.classList.toggle('entry-in', usable);
+    badge.classList.toggle('entry-out', !usable);
+    tile.querySelector('.camera-img').alt = `${cam.label || cam.camera_id} の映像`;
+  });
+}
+
+function setCameraStatus(cameraId, text) {
+  const tile = document.querySelector(`.camera-tile[data-camera-id="${CSS.escape(cameraId)}"]`);
+  if (tile) tile.querySelector('.camera-info').textContent = text;
+}
+
+function startCameraView(cameraId) {
+  stopCameraView(cameraId);
+  const viewer = { timer: null, objectUrl: null, startedAt: Date.now(), stopped: false };
+  cameraViewers[cameraId] = viewer;
+  const tile = document.querySelector(`.camera-tile[data-camera-id="${CSS.escape(cameraId)}"]`);
+  if (tile) tile.querySelector('.camera-toggle').textContent = '止める';
+  setCameraStatus(cameraId, 'カメラを起こしています…（最大 10 秒ほど）');
+  fetchCameraFrame(cameraId);
+}
+
+function stopCameraView(cameraId, reason) {
+  const viewer = cameraViewers[cameraId];
+  if (!viewer) return;
+  viewer.stopped = true;
+  clearTimeout(viewer.timer);
+  const tile = document.querySelector(`.camera-tile[data-camera-id="${CSS.escape(cameraId)}"]`);
+  if (tile) tile.querySelector('.camera-toggle').textContent = '映像を見る';
+  setCameraStatus(cameraId, reason || '');
+}
+
+async function fetchCameraFrame(cameraId) {
+  const viewer = cameraViewers[cameraId];
+  if (!viewer || viewer.stopped) return;
+  if (Date.now() - viewer.startedAt > CAMERA_AUTO_STOP_MS) {
+    stopCameraView(cameraId, '10 分たったので止めました');
+    return;
+  }
+  // タブが隠れている間は取りに行かない（カメラも送信を止める）
+  if (document.visibilityState === 'hidden') {
+    viewer.timer = setTimeout(() => fetchCameraFrame(cameraId), CAMERA_FRAME_INTERVAL_MS);
+    return;
+  }
+
+  try {
+    const res = await fetch(`/api/camera_frame/${encodeURIComponent(cameraId)}`, { cache: 'no-store' });
+    if (viewer.stopped) return;
+    if (res.status === 200) {
+      const blob = await res.blob();
+      if (viewer.stopped) return;
+      const url = URL.createObjectURL(blob);
+      const tile = document.querySelector(`.camera-tile[data-camera-id="${CSS.escape(cameraId)}"]`);
+      if (tile) {
+        const img = tile.querySelector('.camera-img');
+        img.src = url;
+        img.hidden = false;
+        tile.querySelector('.camera-placeholder').hidden = true;
+      }
+      if (viewer.objectUrl) URL.revokeObjectURL(viewer.objectUrl);
+      viewer.objectUrl = url;
+      const frameAt = res.headers.get('X-Frame-At');
+      const age = frameAt ? Math.max(0, Math.round((Date.now() - new Date(frameAt).getTime()) / 1000)) : null;
+      setCameraStatus(cameraId, frameAt ? `撮影 ${formatEntryTime(frameAt)}（${age} 秒前）` : '');
+    } else if (res.status === 204) {
+      setCameraStatus(cameraId, 'カメラを起こしています…（最大 10 秒ほど）');
+    } else {
+      setCameraStatus(cameraId, `映像を取得できません（${res.status}）`);
+    }
+  } catch (e) {
+    console.error('fetchCameraFrame error:', e);
+    setCameraStatus(cameraId, '通信エラー。再試行しています…');
+  }
+  if (!viewer.stopped) viewer.timer = setTimeout(() => fetchCameraFrame(cameraId), CAMERA_FRAME_INTERVAL_MS);
+}
+
+function renderCameraSettings(cameras) {
+  const body = document.getElementById('cameraSettingsBody');
+  if (!body) return;
+  body.innerHTML = '';
+  if (cameras.length === 0) {
+    body.innerHTML = '<tr><td colspan="6" style="text-align:center;color:grey;">カメラはまだありません</td></tr>';
+    return;
+  }
+  cameras.forEach(cam => {
+    const row = document.createElement('tr');
+    row.dataset.cameraId = cam.camera_id;
+    const enabled = cam.enabled !== false;
+    const distance = cam.distance_m === null || cam.distance_m === undefined ? '' : cam.distance_m;
+    row.innerHTML = `
+      <td><span class="entry-badge ${cam.online ? 'entry-in' : 'entry-out'}">${cam.online ? '稼働中' : '停止'}</span></td>
+      <td class="mono-cell">${escapeHtml(cam.camera_id)}</td>
+      <td><input class="input camera-label-input" type="text" value="${escapeHtml(cam.label || '')}"></td>
+      <td><input class="input camera-distance-input ap-node-distance" type="number" min="0" step="1" value="${escapeHtml(distance)}" placeholder="未設定"></td>
+      <td>
+        <select class="select camera-enabled-input">
+          <option value="1" ${enabled ? 'selected' : ''}>受け取る</option>
+          <option value="0" ${enabled ? '' : 'selected'}>受け取らない</option>
+        </select>
+      </td>
+      <td class="ap-node-actions">
+        <button class="button is-success is-small" onclick="saveCamera(this)">保存</button>
+        <button class="button is-danger is-small" onclick="deleteCamera(this)">削除</button>
+      </td>
+    `;
+    body.appendChild(row);
+  });
+}
+
+async function saveCamera(button) {
+  const row = button.closest('tr');
+  const distanceText = row.querySelector('.camera-distance-input').value.trim();
+  const payload = {
+    camera_id: row.dataset.cameraId,
+    label: row.querySelector('.camera-label-input').value.trim(),
+    distance_m: distanceText === '' ? null : Number(distanceText),
+    enabled: row.querySelector('.camera-enabled-input').value === '1',
+  };
+  try {
+    const res = await fetch('/api/cameras', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) {
+      const b = await res.json().catch(() => ({}));
+      alert('保存に失敗しました: ' + (b.error || res.status));
+      return;
+    }
+  } catch (e) {
+    console.error('saveCamera error:', e);
+    alert('保存に失敗しました');
+    return;
+  } finally {
+    isEditing = false;
+  }
+  lastCamerasSig = null;
+  loadCameras();
+}
+
+async function deleteCamera(button) {
+  const cameraId = button.closest('tr').dataset.cameraId;
+  if (!confirm(`カメラ ${cameraId} を一覧から削除しますか？（動いていれば次の通信で再登録されます）`)) return;
+  try {
+    const res = await fetch('/api/cameras', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ camera_id: cameraId })
+    });
+    if (!res.ok) {
+      alert('削除に失敗しました');
+      return;
+    }
+  } catch (e) {
+    console.error('deleteCamera error:', e);
+    alert('削除に失敗しました');
+    return;
+  }
+  lastCamerasSig = null;
+  loadCameras();
 }
 
 

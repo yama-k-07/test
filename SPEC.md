@@ -25,6 +25,7 @@
 | 火災位置の通知 | マップ上で火災の位置を指定 → 各ウォッチに「奥 約320m」などを通知 | §6.7, §7.4 |
 | 入退場管理 | AP 圏内に入った・出た時刻の記録と一覧 | §6.8, §7.6 |
 | AP の管理 | 既設6台の位置設定と、ESP32-S3 で自作した AP の自動登録・死活監視 | §6.2, §7.7, §8 |
+| カメラ映像 | ESP32 カメラのコマ送り映像を、同じ Wi-Fi にいなくてもダッシュボードで見る（見ている間だけ送信） | §5.4b, §8.5 |
 
 ### 1.2 全体の流れ
 
@@ -90,6 +91,8 @@
 | `supabase/fire_location.sql` | | 使用中 | `fire_location` / `device_fire_alerts` の定義 |
 | `supabase/ap_nodes.sql` | | 使用中 | `ap_nodes` の定義 |
 | `firmware/esp32s3_ap/` | 約130（.ino） | 使用中 | ESP32-S3 AP のファームウェア・設定例・README（§8） |
+| `firmware/esp32cam_uplink/` | 約190（.ino） | 使用中 | ESP32 カメラのファームウェア・設定例・README（§8.5） |
+| `supabase/cameras.sql` | | 使用中 | `cameras` テーブルと Storage バケット `camera-frames` の定義 |
 | `AGENTS.md` / `CLAUDE.md` | | 説明書 | 開発ガイド（AI・人間共通）。`CLAUDE.md` は AGENTS.md を読み込むだけ |
 | `docs/AI_WORKFLOW.md` | | 説明書 | 共同開発者が生成 AI と開発する手順 |
 | `scripts/make_ai_context.py` | | 道具 | チャット AI 用のまとめファイル `dist/ai_context.md` を作る |
@@ -125,6 +128,7 @@
 | `TABLE_FIRE_LOCATION` | `fire_location` | `id`（常に 1） | `active`, `distance_m`（入口からの m）, `updated_at` | Flask | Flask |
 | `TABLE_DEVICE_FIRE_ALERTS` | ★`device_fire_alerts` | `device_id` | `fire_active`, `direction`, `distance_m`, `message`, `approx`, `updated_at` | Flask | ウォッチ |
 | `TABLE_AP_NODES` | `ap_nodes` | `mac`（大文字） | `label`, `distance_m`, `enabled`, `fw`, `uptime_s`, `sta_count`, `tx_power_dbm`, `channel`, `uplink_rssi`, `last_seen`, `created_at` | ESP32 ＋ Flask | Flask |
+| `TABLE_CAMERAS` | `cameras` | `camera_id` | `label`, `distance_m`, `enabled`, `fw`, `wifi_rssi`, `width`, `height`, `frame_bytes`, `last_seen`, `last_frame_at`, `watch_until`, `created_at` | ESP32 カメラ ＋ Flask | Flask |
 
 - `area_status_v2` は「エリアと BSSID の対応」「エリアの指示・火災フラグ」「並び順」の3役を1テーブルで兼ね、3つの API（`/api/area`、`/api/area_status`、`/api/area_order`）がそれぞれ別の列を部分 upsert する。
 - `device_fire_alerts` は Realtime の配信対象（`supabase/fire_location.sql` で `supabase_realtime` に追加）。ウォッチが anon key で読むなら同 SQL 末尾の RLS ポリシーを有効にする。
@@ -200,6 +204,17 @@
 | メソッド パス | 認証 | 動作 |
 |---|---|---|
 | `POST /api/ap_heartbeat` | トークン | 本文 `{mac, label, distance_m, fw, uptime_s, sta_count, tx_power_dbm, channel, uplink_rssi}` → `{message, registered}`。`mac` は `AA:BB:CC:DD:EE:FF` 形式。初回は行を作り `label` / `distance_m` / `enabled=true` を入れる。2回目以降は稼働情報と `last_seen` だけ更新（管理画面で直した値は上書きしない）。トークン未設定 503、不一致 401 |
+
+### 5.4b ESP32 カメラ
+
+| メソッド パス | 認証 | 動作 |
+|---|---|---|
+| `POST /api/camera_poll` | トークン | 本文 `{camera_id, label, distance_m, fw, rssi}` → `{send, interval_ms, poll_sec}`。初回は `cameras` に行を作る（`label` / `distance_m` は初期値）。以後は `last_seen` 等だけ更新 |
+| `POST /api/camera_frame?camera_id=…` | トークン | 本文は JPEG そのもの（600KB まで、`X-Frame-Width` / `X-Frame-Height` 任意）。誰かが見ている間だけ Storage `camera-frames/<id>/latest.jpg` に上書き保存。返事は poll と同じ |
+| `GET /api/cameras` | 🔒 | 全カメラ＋`online`（60 秒以内に連絡）＋`watching` |
+| `POST /api/cameras` | 🔒 | `{camera_id, label?, distance_m?, enabled?}` |
+| `DELETE /api/cameras` | 🔒 | `{camera_id}` |
+| `GET /api/camera_frame/<camera_id>` | 🔒 | 最新の JPEG（`X-Frame-At` に撮影時刻）。画像がまだ無ければ 204（`X-Camera-Status: waking`）。**呼ぶたびに「見ている」期限 `watch_until` を延ばす**（残り半分を切ったときだけ書く） |
 
 ### 5.5 エラーの形
 基本は `{"error": "..."}` と 400/500。ログインだけ `{"status":"error","message":...}`。古い API は例外の中身をそのまま返す。2026-10 以降の API は画面には固定文を返し、詳細はサーバーログに出す。
@@ -331,11 +346,12 @@
 | エリア割当設定 | `#areaTableBody` | `loadAreaMapTable` / `saveAreaMapTable` / `removeAreaRow` | `/api/area` |
 | ユーザー設定 | `#userTableBody` | `loadUserTable` / `saveUserTable` / `removeRow` | `/api/user` |
 | ESP32 AP | `#apNodesTableBody` | `loadApNodesTable` / `saveApNode` / `deleteApNode` | `/api/ap_nodes` |
+| カメラ（トンネルマップの下） | `#cameraGrid`, `#cameraSettingsBody` | `loadCameras` / `startCameraView` / `stopCameraView` / `fetchCameraFrame` / `saveCamera` / `deleteCamera` | `/api/cameras`, `/api/camera_frame/<id>` |
 | フッター | LOGOUT ボタン | | `/logout` |
 
 ### 7.2 更新の仕組み
 - **読み込み時**（`DOMContentLoaded`）に全セクションを1回読む。トンネルマップのクリック操作と Realtime 購読もここで始める。
-- **5 秒ごと**（`setInterval`）に `loadAreaBoard`、`loadAreaMapTable`、`loadUserTable`、`loadEntryManagement`、`loadApNodesTable`、`loadTunnelMap` を呼ぶ。AP位置設定とプリセット一覧は読み込み時だけ。
+- **5 秒ごと**（`setInterval`）に `loadAreaBoard`、`loadAreaMapTable`、`loadUserTable`、`loadEntryManagement`、`loadApNodesTable`、`loadCameras`、`loadTunnelMap` を呼ぶ。AP位置設定とプリセット一覧は読み込み時だけ。
 - **Realtime**：anon key で `latest_wifi_reports` の変更を購読し、変更が来たら `loadTunnelMap()`。Supabase 側で Realtime が有効でないと何も起きない（エラーにもならない）。
 - **ちらつき防止**：表やカードは、前回の応答（`JSON.stringify`）を `last*Sig` に覚えておき、同じなら描き直さない。マップは毎回描き直す。
 - **入力中は止める**：`input` / `select` にフォーカスがある間は `isEditing=true` になり、定期更新を丸ごと止める。カードのドラッグ中は `isSorting`。
@@ -451,9 +467,21 @@
 4. 電源を入れると「ESP32 AP」表に出るので、距離を確認して保存する。
 5. 上り回線が無い場合は、シリアル（115200bps）に出る BSSID を「AP位置設定」に手で登録する。この場合は6か所・100m 間隔の位置番号しか選べない。
 
-使っている Arduino-ESP32 の API は、公式ドキュメントと `WiFiGeneric.h` / `WiFiType.h` / `WiFiScan.h` で存在を確認済み。**ファームウェアはまだ一度もコンパイルしていない。**
+使っている Arduino-ESP32 の API は、公式ドキュメントと `WiFiGeneric.h` / `WiFiType.h` / `WiFiScan.h` で存在を確認済み。2026-11-18 に Arduino-ESP32 3.3.13（ESP32S3 Dev Module、標準パーティション）で**コンパイル成功**（フラッシュ 75%・RAM 14%。機能を足すならパーティションを広げる）。実機での動作はまだ確認していない。
 
 ---
+
+### 8.5 ESP32 カメラ（`firmware/esp32cam_uplink/`、外から見られるコマ送りカメラ）
+- **目的**: 同じ Wi-Fi にいなくても、ダッシュボードの「カメラ」欄で映像を見る。公式サンプル CameraWebServer（`http://192.168.4.1` で同じ Wi-Fi から見る）とは別のファームウェア
+- **仕組み**: カメラはインターネットにつながる Wi-Fi（現場 Wi-Fi・モバイルルーター・テザリング）に**つなぎに行く**（STA）。10 秒ごとに `/api/camera_poll`。画面で「映像を見る」が押されると、画面が `/api/camera_frame/<id>` を 1 秒ごとに取りに来て `watch_until`（20 秒）を延ばし、次の poll の返事が `send: true` になる。カメラは約 1 秒ごとに JPEG を `/api/camera_frame` へ送り、返事が `send: false` になったら止まる
+- **保存**: Supabase Storage の非公開バケット `camera-frames` に `<camera_id>/latest.jpg` として最新 1 枚だけ（録画しない）。閲覧はログイン必須
+- **画面**: カメラごとにタイル（名前・距離・稼働中/停止・映像・撮影時刻と遅れ）。「映像を見る」を押したタイルだけ取得し、タブが隠れている間は取りに行かない。10 分で自動停止。設定（名前・距離・受け取る/受け取らない・削除）は欄の下の「カメラの設定」
+- **定数**（`app.py`）: `CAMERA_WATCH_SEC=20`、`CAMERA_IDLE_POLL_SEC=10`、`CAMERA_FRAME_INTERVAL_MS=1000`、`CAMERA_ONLINE_SEC=60`、`CAMERA_MAX_FRAME_BYTES=600KB`
+- **近くで見る（任意）**: `ENABLE_LOCAL_VIEW 1` で自分の Wi-Fi も立て（AP+STA）、CameraWebServer の `app_httpd.cpp` の画面を `http://192.168.4.1` で同時に出す。同じカメラを使うので両方見るとコマ数は落ちる
+- **firmware**: 実機は ESP32-S3-EYE（`CAMERA_MODEL_ESP32S3_EYE`、上下反転を補正）。CameraWebServer の `board_config.h` / `camera_pins.h` / `partitions.csv`（と、近くで見るなら `app_httpd.cpp` / `camera_index.h`）をコピーして使う（Git には入れない）。CameraWebServer の RGB565・240×240 から JPEG・VGA に変更。ボード設定は ESP32S3 Dev Module・OPI PSRAM・Custom パーティション。`config.h` に `CAMERA_ID`、Wi-Fi、`AP_TOKEN`、画像サイズ（既定 VGA）と画質（既定 14）。`esp_camera_*` と HTTPClient の API は公式ソースで確認済み。2026-11-18 に Arduino-ESP32 3.3.13（ESP32S3 Dev Module・OPI PSRAM・Custom パーティション）で、近くで見る画面あり（約 1.15MB）・なし（約 1.08MB）の両方とも**コンパイル成功**。実機での動作はまだ確認していない
+- **回線の目安**: 見ている間 1 時間に 70〜180MB、見ていない間は 10 秒ごとの小さな問い合わせだけ
+- **導入**: `supabase/cameras.sql` を実行 → Vercel に `AP_SHARED_TOKEN` → firmware を書き込む（`firmware/esp32cam_uplink/README.md`）
+- サーバー側は Supabase を偽物に差し替えたテスト（20 項目）で、登録・送信の開始と停止・保存・閲覧・認証を確認済み
 
 ## 9. ウォッチとの約束（まとめ）
 
@@ -526,7 +554,7 @@
 
 ### 運用
 1. **本番デプロイが失敗中**（§2.4）。PR #26 の変更は本番に出ていない。
-2. **実際に動かしていないコードがある**：PR #26 の `app.py`（ESP32 AP 受付、`ApMap`。構文チェックのみ通過）、ESP32 ファームウェア（ESP32 のボードパッケージ未導入）。
+2. **実際に動かしていないコードがある**：PR #26 の `app.py`（ESP32 AP 受付、`ApMap`。構文チェックのみ通過）、ESP32 ファームウェア（コンパイルは成功、実機での動作は未確認）。
 3. `requirements.txt` のバージョンが未固定。venv（`api/properioai/`）がコミットされている。
 4. 2026-10 以前のテーブルの定義（SQL）がリポジトリに無い。
 
