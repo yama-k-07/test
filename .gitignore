@@ -5,3 +5,9 @@
 firmware/**/config.h
 dist/
 __pycache__/
+# CameraWebServer からコピーして使うファイル（firmware/esp32cam_uplink/README.md）
+firmware/esp32cam_uplink/board_config.h
+firmware/esp32cam_uplink/camera_pins.h
+firmware/esp32cam_uplink/partitions.csv
+firmware/esp32cam_uplink/app_httpd.cpp
+firmware/esp32cam_uplink/camera_index.h

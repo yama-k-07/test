@@ -11,6 +11,7 @@
 トンネル内の作業者が身に着けた **Galaxy Watch** が、近くの Wi-Fi AP の BSSID（電波の強い順に `mac01` / `mac02`）を Supabase に送る。
 **Flask サーバー**がそれを AP の設置距離と照らして位置を推定し、**管理ダッシュボード**で位置の表示・避難指示・個別指示・火災位置の通知・入退場管理を行う。
 AP は既設の6台（AP1=入口0m 〜 AP11=500m、100m 間隔）に加え、**ESP32-S3 で自作した AP** を増設できる。
+ESP32 カメラのコマ送り映像も、同じ Wi-Fi にいなくてもダッシュボードで見られる（見ている間だけ送信）。
 
 ```
 Galaxy Watch ──(mac01, mac02)──> Supabase: wifi_reports
@@ -38,6 +39,7 @@ ESP32-S3 AP ──heartbeat──> /api/ap_heartbeat ──> Supabase: ap_nodes
 | `api/static/style.css` | 見た目。末尾の「見やすさ調整」ブロック以降が現行の上書き |
 | `supabase/*.sql` | 追加したテーブルの定義（Supabase の SQL Editor で実行） |
 | `firmware/esp32s3_ap/` | ESP32-S3 AP のファームウェア（`.ino`、`config.example.h`、README） |
+| `firmware/esp32cam_uplink/` | ESP32 カメラのファームウェア（外から見られるコマ送り。`.ino`、`config.example.h`、README） |
 | `SPEC.md` | 現状仕様（データモデル・API 一覧・計算式・画面の仕組み） |
 | `vercel.json`（`api/` 内）, `requirements.txt` | デプロイ設定と Python 依存 |
 
@@ -64,6 +66,7 @@ ESP32-S3 AP ──heartbeat──> /api/ap_heartbeat ──> Supabase: ap_nodes
 | 入退場の表 | `admin.js` の `loadEntryManagement` / `renderEntryCurrentTable` / `renderEntryLogTable` |
 | AP位置設定・プリセット | `admin.js` の `loadApPositionsTable` / `saveApPositionsTable` / `loadApPreset` / `saveApPreset`。選択肢は `AP_LABELS` / `AP_POSITION_DISTANCES_M` |
 | ESP32 AP の表 | `admin.js` の `loadApNodesTable` / `saveApNode` / `deleteApNode` |
+| カメラの映像・設定の表 | `admin.js` の `loadCameras` / `startCameraView` / `fetchCameraFrame` / `saveCamera`。取得間隔・自動停止は `CAMERA_FRAME_INTERVAL_MS` / `CAMERA_AUTO_STOP_MS` |
 | ユーザー・エリア割当の表 | `admin.js` の `loadUserTable` / `saveUserTable`、`loadAreaMapTable` / `saveAreaMapTable` |
 | 色・文字サイズ・余白 | `style.css` 末尾の「見やすさ調整」ブロック。状態色は `--state-*` |
 | ログイン画面 | `login.html`（送信は `POST /` に `{email, password, mode}`） |
@@ -82,6 +85,7 @@ ESP32-S3 AP ──heartbeat──> /api/ap_heartbeat ──> Supabase: ap_nodes
 | API を追加する | 既存の `@app.route` を真似る。管理画面用はログイン必須の `@login_required` を付ける。SPEC.md §5 の API 表に追記 |
 | テーブルを追加する | `supabase/新しい名前.sql` を作り、`app.py` 冒頭に `TABLE_XXX = "..."` を足す。SPEC.md §4 に追記 |
 | ESP32 AP からの受付 | `ap_heartbeat`（トークン認証）、`handle_ap_nodes` |
+| カメラ映像の受付・配信 | `camera_poll` / `camera_frame_upload`（カメラから。トークン認証）、`camera_frame_view` / `handle_cameras`（画面から）。定数 `CAMERA_*` |
 
 ### ESP32-S3 ファームウェア（`firmware/esp32s3_ap/`）
 
@@ -90,6 +94,7 @@ ESP32-S3 AP ──heartbeat──> /api/ap_heartbeat ──> Supabase: ap_nodes
 | 1台ごとの設定（表示名・距離・チャンネル・出力・Wi-Fi） | `config.h`（`config.example.h` をコピーして作る） |
 | SSID の付け方・送信出力の扱い | `esp32s3_ap.ino` の `startAccessPoint` / `applyTxPower` |
 | heartbeat の内容・間隔 | `esp32s3_ap.ino` の `sendHeartbeat` / `HEARTBEAT_INTERVAL_MS`（サーバー側 `ap_heartbeat` と項目を揃える） |
+| カメラの画像サイズ・画質・送り方 | `firmware/esp32cam_uplink/config.h` の `FRAME_SIZE` / `JPEG_QUALITY`、`esp32cam_uplink.ino` の `initCamera` / `sendFrame` / `sendPoll`。ピンは CameraWebServer からコピーした `board_config.h` / `camera_pins.h` |
 
 ---
 

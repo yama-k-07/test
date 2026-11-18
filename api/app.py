@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, render_template, redirect, url_for, session
+from flask import Flask, Response, request, jsonify, render_template, redirect, url_for, session
 from supabase import create_client, Client
 from dotenv import load_dotenv
 from functools import wraps
@@ -40,6 +40,8 @@ TABLE_DEVICE_FIRE_ALERTS = "device_fire_alerts"
 # ESP32-S3 で作った AP（firmware/esp32s3_ap）。heartbeat で自動登録され、距離は管理画面で設定する。
 # スキーマは supabase/ap_nodes.sql。
 TABLE_AP_NODES = "ap_nodes"
+# ESP32 カメラ（firmware/esp32cam_uplink）。スキーマと Storage バケットは supabase/cameras.sql。
+TABLE_CAMERAS = "cameras"
 
 entry_status_table = []
 last_seen_dict = {}
@@ -965,6 +967,207 @@ def handle_ap_nodes():
     except Exception as e:
         print(f"Error updating ap node {mac}: {e}")
         return jsonify({'error': '保存に失敗しました'}), 500
+
+
+# ==========================================
+#  ESP32 カメラ（firmware/esp32cam_uplink）
+# ==========================================
+# 見ている人がいる間だけ、カメラが JPEG を 1 枚ずつ送る（コマ送り）。
+#   カメラ: 10 秒ごとに /api/camera_poll →「送って」と返されたら /api/camera_frame に JPEG を送り続ける
+#   画面:   /api/camera_frame/<id> を 1 秒ごとに取りに来る → そのたびに watch_until を延ばす
+# 画像は Supabase Storage の CAMERA_BUCKET に「<camera_id>/latest.jpg」として上書き保存する（最新 1 枚だけ）。
+# 認証はカメラ側が X-AP-Token（AP_SHARED_TOKEN）、画面側がログイン。スキーマは supabase/cameras.sql。
+CAMERA_BUCKET = "camera-frames"
+CAMERA_WATCH_SEC = 20            # 最後に画面が画像を取りに来てから、この秒数は送り続ける
+CAMERA_IDLE_POLL_SEC = 10        # 誰も見ていない間、カメラが問い合わせる間隔
+CAMERA_FRAME_INTERVAL_MS = 1000  # 見られている間、カメラが送る間隔
+CAMERA_ONLINE_SEC = 60           # last_seen がこの秒数以内なら「稼働中」
+CAMERA_MAX_FRAME_BYTES = 600 * 1024
+_CAMERA_ID_RE = re.compile(r'^[A-Za-z0-9_-]{1,32}$')
+
+
+def device_token_ok():
+    """ESP32（AP・カメラ）からの要求の共有トークンを確かめる。(ok, エラー応答)"""
+    if not AP_SHARED_TOKEN:
+        return False, (jsonify({'error': 'device API is disabled (AP_SHARED_TOKEN not set)'}), 503)
+    if not hmac.compare_digest(request.headers.get('X-AP-Token', ''), AP_SHARED_TOKEN):
+        return False, (jsonify({'error': 'invalid token'}), 401)
+    return True, None
+
+
+def load_camera(camera_id):
+    try:
+        res = supabase.table(TABLE_CAMERAS).select("*").eq("camera_id", camera_id).execute()
+        return (res.data or [None])[0]
+    except Exception as e:
+        print(f"Error loading camera {camera_id}: {e}")
+        return None
+
+
+def camera_watching(row):
+    """誰かが今このカメラを見ているか（watch_until が未来）"""
+    ts = parse_ts((row or {}).get('watch_until'))
+    return ts is not None and ts > datetime.now(timezone.utc)
+
+
+def camera_instruction(row):
+    """カメラへの返事: 送るかどうかと、次に連絡する間隔"""
+    send = bool(row) and row.get('enabled') is not False and camera_watching(row)
+    return {'send': send, 'interval_ms': CAMERA_FRAME_INTERVAL_MS, 'poll_sec': CAMERA_IDLE_POLL_SEC}
+
+
+@app.route('/api/camera_poll', methods=['POST'])
+def camera_poll():
+    """カメラが 10 秒ごとに送る生存通知。初回は cameras に行を作る（label / distance_m は初期値）。
+    返事の send が true の間、カメラは /api/camera_frame に画像を送る。"""
+    ok, err = device_token_ok()
+    if not ok:
+        return err
+    data = request.get_json(silent=True) or {}
+    camera_id = str(data.get('camera_id') or '')
+    if not _CAMERA_ID_RE.match(camera_id):
+        return jsonify({'error': 'camera_id は英数字・_・- の 1〜32 文字で指定してください'}), 400
+
+    row = load_camera(camera_id)
+    payload = {'camera_id': camera_id, 'last_seen': now_iso(), 'fw': str(data.get('fw') or '')[:32] or None}
+    if isinstance(data.get('rssi'), int):
+        payload['wifi_rssi'] = data['rssi']
+    if row is None:
+        payload['label'] = str(data.get('label') or '')[:32] or camera_id
+        d = data.get('distance_m')
+        payload['distance_m'] = float(d) if isinstance(d, (int, float)) else None
+        payload['enabled'] = True
+    try:
+        supabase.table(TABLE_CAMERAS).upsert(payload).execute()
+    except Exception as e:
+        print(f"Error saving camera poll {camera_id}: {e}")
+        return jsonify({'error': 'カメラ情報の保存に失敗しました（supabase/cameras.sql は実行済みですか？）'}), 500
+    return jsonify(camera_instruction(row or payload))
+
+
+@app.route('/api/camera_frame', methods=['POST'])
+def camera_frame_upload():
+    """カメラが JPEG を 1 枚送る（本文は image/jpeg そのもの、?camera_id=xxx）。最新 1 枚だけ保存する。"""
+    ok, err = device_token_ok()
+    if not ok:
+        return err
+    camera_id = request.args.get('camera_id', '')
+    if not _CAMERA_ID_RE.match(camera_id):
+        return jsonify({'error': 'camera_id が不正です'}), 400
+    jpeg = request.get_data(cache=False)
+    if not jpeg or len(jpeg) > CAMERA_MAX_FRAME_BYTES or jpeg[:2] != b'\xff\xd8':
+        return jsonify({'error': f'JPEG（{CAMERA_MAX_FRAME_BYTES // 1024}KB まで）を送ってください'}), 400
+
+    row = load_camera(camera_id)
+    if row is None:
+        return jsonify({'error': '先に /api/camera_poll で登録してください'}), 409
+    if not camera_watching(row) or row.get('enabled') is False:
+        # 誰も見ていないので保存しない（カメラは送るのをやめる）
+        return jsonify(camera_instruction(row))
+
+    try:
+        supabase.storage.from_(CAMERA_BUCKET).upload(
+            f"{camera_id}/latest.jpg", jpeg,
+            {"content-type": "image/jpeg", "cache-control": "0", "upsert": "true"},
+        )
+        now = now_iso()
+        update = {'last_frame_at': now, 'last_seen': now, 'frame_bytes': len(jpeg)}
+        for key, header in (('width', 'X-Frame-Width'), ('height', 'X-Frame-Height')):
+            if request.headers.get(header, '').isdigit():
+                update[key] = int(request.headers[header])
+        supabase.table(TABLE_CAMERAS).update(update).eq('camera_id', camera_id).execute()
+    except Exception as e:
+        print(f"Error saving camera frame {camera_id}: {e}")
+        return jsonify({'error': '画像の保存に失敗しました（Storage の camera-frames バケットはありますか？）'}), 500
+    return jsonify(camera_instruction(row))
+
+
+@app.route('/api/cameras', methods=['GET', 'POST', 'DELETE'])
+@login_required
+def handle_cameras():
+    """カメラの一覧と設定。GET は online（CAMERA_ONLINE_SEC 以内に連絡あり）と watching 付き。
+    POST {camera_id, label?, distance_m?, enabled?} で設定変更、DELETE {camera_id} で削除。"""
+    if request.method == 'GET':
+        try:
+            rows = supabase.table(TABLE_CAMERAS).select("*").execute().data or []
+        except Exception as e:
+            print(f"Error loading cameras: {e}")
+            rows = []
+        rows.sort(key=lambda r: (r.get('distance_m') is None, r.get('distance_m') or 0, r.get('camera_id')))
+        for r in rows:
+            r['online'] = is_recent(r.get('last_seen'), CAMERA_ONLINE_SEC)
+            r['watching'] = camera_watching(r)
+        return jsonify(rows)
+
+    data = request.json or {}
+    camera_id = str(data.get('camera_id') or '')
+    if not _CAMERA_ID_RE.match(camera_id):
+        return jsonify({'error': 'camera_id を指定してください'}), 400
+
+    if request.method == 'DELETE':
+        try:
+            supabase.table(TABLE_CAMERAS).delete().eq('camera_id', camera_id).execute()
+            return jsonify({'message': 'deleted'})
+        except Exception as e:
+            print(f"Error deleting camera {camera_id}: {e}")
+            return jsonify({'error': '削除に失敗しました'}), 500
+
+    update = {}
+    if 'label' in data:
+        update['label'] = (str(data.get('label') or '').strip()[:32]) or camera_id
+    if 'distance_m' in data:
+        d = data.get('distance_m')
+        try:
+            update['distance_m'] = None if d in (None, '') else float(d)
+        except (TypeError, ValueError):
+            return jsonify({'error': 'distance_m は数値（入口からの m）で指定してください'}), 400
+    if 'enabled' in data:
+        update['enabled'] = bool(data.get('enabled'))
+    if not update:
+        return jsonify({'error': '変更する項目がありません'}), 400
+    try:
+        supabase.table(TABLE_CAMERAS).update(update).eq('camera_id', camera_id).execute()
+        return jsonify({'message': 'saved'})
+    except Exception as e:
+        print(f"Error updating camera {camera_id}: {e}")
+        return jsonify({'error': '保存に失敗しました'}), 500
+
+
+@app.route('/api/camera_frame/<camera_id>', methods=['GET'])
+@login_required
+def camera_frame_view(camera_id):
+    """画面が 1 秒ごとに呼ぶ。最新の 1 枚を返し、「見ている」期限（watch_until）を延ばす。
+    まだ画像が無い・カメラが起きる前は 204（X-Camera-Status で理由）。"""
+    if not _CAMERA_ID_RE.match(camera_id):
+        return jsonify({'error': 'camera_id が不正です'}), 400
+    row = load_camera(camera_id)
+    if row is None:
+        return jsonify({'error': 'そのカメラはありません'}), 404
+
+    # 期限が残り半分を切ったときだけ延ばす（毎秒 DB に書かないため）
+    watch_until = parse_ts(row.get('watch_until'))
+    now = datetime.now(timezone.utc)
+    if watch_until is None or (watch_until - now).total_seconds() < CAMERA_WATCH_SEC / 2:
+        try:
+            supabase.table(TABLE_CAMERAS).update(
+                {'watch_until': (now + timedelta(seconds=CAMERA_WATCH_SEC)).isoformat()}
+            ).eq('camera_id', camera_id).execute()
+        except Exception as e:
+            print(f"Error extending camera watch {camera_id}: {e}")
+
+    headers = {'Cache-Control': 'no-store', 'X-Frame-At': row.get('last_frame_at') or ''}
+    last_frame = parse_ts(row.get('last_frame_at'))
+    # 見始めたばかりで、前回見たときの古い画像しか無いなら「起こしている」を返す
+    if last_frame is None or (now - last_frame).total_seconds() > CAMERA_WATCH_SEC + CAMERA_IDLE_POLL_SEC:
+        headers['X-Camera-Status'] = 'waking'
+        return Response(status=204, headers=headers)
+    try:
+        jpeg = supabase.storage.from_(CAMERA_BUCKET).download(f"{camera_id}/latest.jpg")
+    except Exception as e:
+        print(f"Error downloading camera frame {camera_id}: {e}")
+        headers['X-Camera-Status'] = 'no-frame'
+        return Response(status=204, headers=headers)
+    return Response(jpeg, mimetype='image/jpeg', headers=headers)
 
 
 @app.route('/api/wifi_map', methods=['GET'])
