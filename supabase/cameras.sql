@@ -21,3 +21,7 @@ create table if not exists public.cameras (
 insert into storage.buckets (id, name, public)
 values ('camera-frames', 'camera-frames', false)
 on conflict (id) do nothing;
+
+-- 2026-11-18 追加: カメラが位置推定用の AP を兼ねるとき、その AP の BSSID（ap_nodes.mac）。
+-- これがあると、カメラ欄の「入口から〜m」は ESP32 AP 表の距離と連動する（すでに実行済みの DB はこの行だけ実行）
+alter table public.cameras add column if not exists ap_mac text;
