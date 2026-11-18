@@ -107,7 +107,7 @@ ESP32-S3 AP ──heartbeat──> /api/ap_heartbeat ──> Supabase: ap_nodes
 - 画面に文字列を入れるときは `escapeHtml()` を通す（`innerHTML` に生で入れない）。
 - チェックボックスは全体の仕組みで「行が赤く点滅（火災表示）」になる。火災以外のオン/オフはプルダウンにする。
 - 見た目の調整は `style.css` 末尾のブロックで行う。**ドット調フォント・ピクセル枠・ロゴ（`banner.png`）は変えない。**
-- `GET /api/wifi_map` と `GET /api/entry_management` は表示用だが DB にも書き込む（SPEC §6）。呼び出し回数を変えると挙動が変わる。
+- `GET /api/wifi_map` と `GET /api/entry_management` は表示用だが DB にも書き込む（SPEC §6.10）。呼び出し回数を変えると挙動が変わる。
 - Supabase の Python クライアントは `supabase.table(...).select/insert/upsert/update/delete().eq(...).execute()` の形。**ライブラリの API は推測しない**（公式ドキュメントで確認）。Arduino-ESP32 も同じ。
 - 秘密情報（`.env`、`config.h`、トークン、パスワード）はコードやチャットに貼らない。
 
@@ -119,6 +119,7 @@ ESP32-S3 AP ──heartbeat──> /api/ap_heartbeat ──> Supabase: ap_nodes
   - `.env` は本番と同じ Supabase を指すことが多い。**ローカルで操作しても本番データが変わる。**
 - 本番: https://test-fawn-iota-73.vercel.app/ （`/test-deploy` が `DEPLOYED-V3-POST-OK` を返せばデプロイ済み。ダッシュボードはログイン必須）
 - 自動テストは無い。変更後は該当画面を実際に操作して確かめる。
+- 仕様書（SPEC.md）や関数名を変えたら `python scripts/build_spec_qa.py` で仕様Q&A ページを作り直す（公開し直しはオーナー。docs/AI_WORKFLOW.md §2-0）。
 - ESP32: Arduino IDE（ボード: ESP32S3 Dev Module）でコンパイル・書き込み。手順は `firmware/esp32s3_ap/README.md`。
 
 ---

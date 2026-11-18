@@ -333,7 +333,7 @@ SMOOTHING_MAX_SAMPLES = 8
 OUTLIER_SPACINGS = 1.5
 
 # 1レポート内の重み。mac01 は最も電波の強いAP、mac02 は2番目（ウォッチ側の仕様）なので、
-# 人は mac01 寄りにいる。値はシミュレーションで決めた（結果は SPEC.md §6.2）。
+# 人は mac01 寄りにいる。値はシミュレーションで決めた（結果は SPEC.md §10）。
 MAC01_WEIGHT = 0.8
 
 
