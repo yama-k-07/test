@@ -1641,7 +1641,7 @@ async function loadCameras() {
   }
   if (!Array.isArray(cameras)) return;
 
-  const sig = JSON.stringify(cameras.map(c => [c.camera_id, c.label, c.distance_m, c.online, c.enabled, c.wifi_rssi]));
+  const sig = JSON.stringify(cameras.map(c => [c.camera_id, c.label, c.distance_m, c.distance_source, c.online, c.enabled, c.wifi_rssi]));
   if (sig === lastCamerasSig) return;
   lastCamerasSig = sig;
 
@@ -1784,11 +1784,13 @@ function renderCameraSettings(cameras) {
     row.dataset.cameraId = cam.camera_id;
     const enabled = cam.enabled !== false;
     const distance = cam.distance_m === null || cam.distance_m === undefined ? '' : cam.distance_m;
+    const linked = cam.distance_source === 'ap'
+      ? `<p class="help">ESP32 AP「${escapeHtml(cam.ap_label || cam.ap_mac || '')}」と連動</p>` : '';
     row.innerHTML = `
       <td><span class="entry-badge ${cam.online ? 'entry-in' : 'entry-out'}">${cam.online ? '稼働中' : '停止'}</span></td>
       <td class="mono-cell">${escapeHtml(cam.camera_id)}</td>
       <td><input class="input camera-label-input" type="text" value="${escapeHtml(cam.label || '')}"></td>
-      <td><input class="input camera-distance-input ap-node-distance" type="number" min="0" step="1" value="${escapeHtml(distance)}" placeholder="未設定"></td>
+      <td><input class="input camera-distance-input ap-node-distance" type="number" min="0" step="1" value="${escapeHtml(distance)}" placeholder="未設定">${linked}</td>
       <td>
         <select class="select camera-enabled-input">
           <option value="1" ${enabled ? 'selected' : ''}>受け取る</option>
@@ -1833,6 +1835,8 @@ async function saveCamera(button) {
   }
   lastCamerasSig = null;
   loadCameras();
+  lastApNodesSig = null;   // AP を兼ねるカメラは ESP32 AP 表の距離も変わる
+  loadApNodesTable();
 }
 
 async function deleteCamera(button) {

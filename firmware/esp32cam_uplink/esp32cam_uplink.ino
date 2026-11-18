@@ -4,11 +4,15 @@
 // ダッシュボード（https://test-fawn-iota-73.vercel.app/）で誰かが「映像を見る」を押している間だけ、
 // 約 1 秒ごとに JPEG を 1 枚ずつサーバーへ送る。誰も見ていない間は 10 秒ごとの生存通知だけ。
 //
-//   10 秒ごと   POST /api/camera_poll   {camera_id, label, distance_m, fw, rssi} → {"send": true/false, ...}
+//   10 秒ごと   POST /api/camera_poll   {camera_id, label, distance_m, fw, rssi, ap_mac} → {"send": true/false, ...}
 //   send の間   POST /api/camera_frame?camera_id=...（本文は JPEG そのもの）     → {"send": true/false, ...}
 //
 // ENABLE_LOCAL_VIEW を 1 にすると、今までの CameraWebServer と同じく自分の Wi-Fi も立て、
 // 近くでは http://192.168.4.1 でなめらかな映像も見られる（クラウドへの送信と同時に動く）。
+//
+// ENABLE_AP_BEACON を 1（既定）にすると、位置推定用の AP も兼ねる（firmware/esp32s3_ap と同じ役目）。
+// 自分の Wi-Fi（LOCAL_AP_SSID）の BSSID を 30 秒ごとに POST /api/ap_heartbeat で知らせるので、
+// ダッシュボードの「ESP32 AP」表に出る。そこで距離を入れると、ウォッチの位置推定に使われる。
 //
 // 準備:
 //   1. いま動いている CameraWebServer のフォルダから board_config.h・camera_pins.h・partitions.csv を
@@ -30,6 +34,22 @@
 #ifndef ENABLE_LOCAL_VIEW
 #define ENABLE_LOCAL_VIEW 0
 #endif
+// 位置推定用の AP を兼ねる（config.h に無ければ兼ねる）
+#ifndef ENABLE_AP_BEACON
+#define ENABLE_AP_BEACON 1
+#endif
+#ifndef AP_LABEL
+#define AP_LABEL CAMERA_LABEL               // ESP32 AP 表に出る名前（初回登録時の初期値）
+#endif
+#ifndef AP_DISTANCE_M
+#define AP_DISTANCE_M CAMERA_DISTANCE_M     // 入口からの距離[m]（初回登録時の初期値。以後は画面で変更）
+#endif
+#ifndef AP_TX_POWER_DBM
+#define AP_TX_POWER_DBM 8.5                 // esp32s3_ap と同じ既定値。上り回線の電波も同じ出力になる
+#endif
+#if (ENABLE_LOCAL_VIEW || ENABLE_AP_BEACON) && !defined(LOCAL_AP_SSID)
+#error "LOCAL_AP_SSID / LOCAL_AP_PASSWORD を config.h に書いてください（自分の Wi-Fi の名前とパスワード）"
+#endif
 // JPEG で撮れないカメラ用（config.h に無ければこの値）
 #ifndef RGB_FRAME_SIZE
 #define RGB_FRAME_SIZE FRAMESIZE_QVGA   // 320x240。RGB565 は 1 コマが大きいので小さめにする
@@ -42,8 +62,9 @@ void startCameraServer();   // app_httpd.cpp
 void setupLedFlash();       // app_httpd.cpp
 #endif
 
-static const char *FW_VERSION = "1.2.0";
+static const char *FW_VERSION = "1.3.0";
 static const uint32_t WIFI_RETRY_MS = 10 * 1000;
+static const uint32_t HEARTBEAT_INTERVAL_MS = 30 * 1000;   // サーバーの AP_NODE_ONLINE_SEC(90) の 1/3
 
 static WiFiClientSecure tls;
 static uint32_t pollIntervalMs = 10 * 1000;   // サーバーの返事 poll_sec で上書き
@@ -52,6 +73,8 @@ static bool sending = false;                  // サーバーが「送って」�
 static uint32_t lastPollMs = 0;
 static uint32_t lastFrameMs = 0;
 static uint32_t lastWifiTryMs = 0;
+static uint32_t lastHeartbeatMs = 0;
+static String apBssid;                        // 自分の Wi-Fi の BSSID（ウォッチが mac01/mac02 として送る値）
 
 static bool initCamera() {
   // 設定は CameraWebServer の setup() と同じ。違いは画像の大きさと画質（回線を節約するため）
@@ -169,10 +192,12 @@ static void sendPoll() {
   HTTPClient http;
   if (!beginRequest(http, "/api/camera_poll")) return;
   http.addHeader("Content-Type", "application/json");
-  char body[256];
+  // ap_mac: 位置推定用の AP を兼ねるとき、その BSSID（サーバーがカメラの距離を ESP32 AP 表と連動させる）
+  char body[320];
   snprintf(body, sizeof(body),
-           "{\"camera_id\":\"%s\",\"label\":\"%s\",\"distance_m\":%.1f,\"fw\":\"%s\",\"rssi\":%ld}",
-           CAMERA_ID, CAMERA_LABEL, (double)CAMERA_DISTANCE_M, FW_VERSION, (long)WiFi.RSSI());
+           "{\"camera_id\":\"%s\",\"label\":\"%s\",\"distance_m\":%.1f,\"fw\":\"%s\",\"rssi\":%ld,\"ap_mac\":\"%s\"}",
+           CAMERA_ID, CAMERA_LABEL, (double)CAMERA_DISTANCE_M, FW_VERSION, (long)WiFi.RSSI(),
+           ENABLE_AP_BEACON ? apBssid.c_str() : "");
   int code = http.POST((uint8_t *)body, strlen(body));
   String res = code > 0 ? http.getString() : "";
   http.end();
@@ -180,6 +205,47 @@ static void sendPoll() {
   if (code == 200) readInstruction(res);
   else sending = false;
 }
+
+#if ENABLE_AP_BEACON
+// AP_TX_POWER_DBM に一番近い（それ以下の）設定値を選ぶ（esp32s3_ap.ino と同じ）
+static wifi_power_t txPowerFromDbm(float dbm) {
+  struct { float dbm; wifi_power_t value; } table[] = {
+    {21, WIFI_POWER_21dBm}, {20.5, WIFI_POWER_20_5dBm}, {20, WIFI_POWER_20dBm},
+    {19.5, WIFI_POWER_19_5dBm}, {19, WIFI_POWER_19dBm}, {18.5, WIFI_POWER_18_5dBm},
+    {17, WIFI_POWER_17dBm}, {15, WIFI_POWER_15dBm}, {13, WIFI_POWER_13dBm},
+    {11, WIFI_POWER_11dBm}, {8.5, WIFI_POWER_8_5dBm}, {7, WIFI_POWER_7dBm},
+    {5, WIFI_POWER_5dBm}, {2, WIFI_POWER_2dBm}, {-1, WIFI_POWER_MINUS_1dBm},
+  };
+  for (auto &t : table) {
+    if (dbm >= t.dbm) return t.value;
+  }
+  return WIFI_POWER_MINUS_1dBm;
+}
+
+static void applyTxPower() {
+  bool ok = WiFi.setTxPower(txPowerFromDbm(AP_TX_POWER_DBM));
+  Serial.printf("[AP] tx power request %.1f dBm -> %s (current=%d x0.25dBm)\n",
+                (double)AP_TX_POWER_DBM, ok ? "ok" : "FAILED", (int)WiFi.getTxPower());
+}
+
+// esp32s3_ap.ino の sendHeartbeat と同じ項目（サーバーの ap_heartbeat が受ける形）
+static void sendHeartbeat() {
+  HTTPClient http;
+  if (!beginRequest(http, "/api/ap_heartbeat")) return;
+  http.addHeader("Content-Type", "application/json");
+  char body[384];
+  snprintf(body, sizeof(body),
+           "{\"mac\":\"%s\",\"label\":\"%s\",\"distance_m\":%.1f,\"fw\":\"cam-%s\","
+           "\"uptime_s\":%lu,\"sta_count\":%u,\"tx_power_dbm\":%.1f,\"channel\":%ld,\"uplink_rssi\":%ld}",
+           apBssid.c_str(), AP_LABEL, (double)AP_DISTANCE_M, FW_VERSION,
+           (unsigned long)(millis() / 1000), (unsigned)WiFi.softAPgetStationNum(),
+           (double)AP_TX_POWER_DBM, (long)WiFi.channel(), (long)WiFi.RSSI());
+  int code = http.POST((uint8_t *)body, strlen(body));
+  String res = code > 0 ? http.getString() : "";
+  http.end();
+  Serial.printf("[HB] %d %s\n", code, res.c_str());
+}
+#endif
 
 static void sendFrame() {
   camera_fb_t *fb = esp_camera_fb_get();
@@ -236,20 +302,27 @@ void setup() {
   tls.setInsecure();   // 証明書を検証しない（試験用）。本番は config.h に SERVER_ROOT_CA を入れる
 #endif
 
-#if ENABLE_LOCAL_VIEW
-  // 近くでは今までどおり http://192.168.4.1 で見られるようにする（自分の Wi-Fi を立てつつ、上り回線にもつなぐ）
+#if ENABLE_LOCAL_VIEW || ENABLE_AP_BEACON
+  // 自分の Wi-Fi を立てつつ、上り回線にもつなぐ。この Wi-Fi は「近くで見る画面」と「位置推定用の AP」を兼ねる
   // 上り回線につながると、自分の Wi-Fi のチャンネルは上り回線と同じになる（ESP32 の仕様）
   WiFi.mode(WIFI_AP_STA);
   WiFi.softAP(LOCAL_AP_SSID, LOCAL_AP_PASSWORD);
+  WiFi.setSleep(false);   // ビーコンを安定して出すため省電力を切る
+  apBssid = WiFi.softAPmacAddress();
+#else
+  WiFi.mode(WIFI_STA);
   WiFi.setSleep(false);
+#endif
+#if ENABLE_AP_BEACON
+  applyTxPower();
+  Serial.printf("[AP] SSID=%s  BSSID=%s（位置推定用。ESP32 AP 表で距離を設定）\n", LOCAL_AP_SSID, apBssid.c_str());
+#endif
+#if ENABLE_LOCAL_VIEW
 #if defined(LED_GPIO_NUM)
   setupLedFlash();
 #endif
   startCameraServer();   // app_httpd.cpp（CameraWebServer からコピー）
   Serial.printf("[LOCAL] SSID=%s  http://%s\n", LOCAL_AP_SSID, WiFi.softAPIP().toString().c_str());
-#else
-  WiFi.mode(WIFI_STA);
-  WiFi.setSleep(false);
 #endif
   ensureWifi();
 }
@@ -263,6 +336,12 @@ void loop() {
   }
 
   uint32_t now = millis();
+#if ENABLE_AP_BEACON
+  if (lastHeartbeatMs == 0 || now - lastHeartbeatMs >= HEARTBEAT_INTERVAL_MS) {
+    lastHeartbeatMs = now;
+    sendHeartbeat();
+  }
+#endif
   if (sending) {
     if (now - lastFrameMs >= frameIntervalMs) {
       lastFrameMs = now;

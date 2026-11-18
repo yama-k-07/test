@@ -12,7 +12,15 @@ ESP32 カメラ ──(インターネットにつながる Wi-Fi)──> Vercel
 
 - **誰かが見ている間だけ送る**: 画面が画像を取りに来ると、サーバーは「見ている」期限（20 秒）を延ばす。カメラは 10 秒ごとの問い合わせの返事で「送って」と言われたら、約 1 秒ごとに JPEG を送る。見る人がいなくなると自動で止まる
 - 映像は **約 1 秒に 1 枚のコマ送り**（動画ではない）。見始めてから映るまで最大 10 秒ほど
-- 以前の `http://192.168.4.1`（同じ Wi-Fi で見る公式サンプル）とは別のプログラム。このファームウェアでは ESP32 は自分の Wi-Fi を立てず、インターネットにつながる Wi-Fi に**つなぎに行く**
+- ESP32 はインターネットにつながる Wi-Fi に**つなぎに行く**。同時に自分の Wi-Fi（`LOCAL_AP_SSID`）も立て、これは「近くで `http://192.168.4.1` を見る画面」（`ENABLE_LOCAL_VIEW 1`）と「位置推定用の AP」（`ENABLE_AP_BEACON 1`）を兼ねる
+
+## 位置推定用の AP を兼ねる（`ENABLE_AP_BEACON 1`、既定）
+
+- `firmware/esp32s3_ap` と同じく、自分の Wi-Fi の BSSID を 30 秒ごとに `POST /api/ap_heartbeat` で知らせる。サーバー側の変更は無く、ダッシュボードの「**ESP32 AP**」表にカメラが出る（fw 欄は `cam-1.3.0` のように `cam-` 付き）
+- 初回登録時の名前と距離は `CAMERA_LABEL` / `CAMERA_DISTANCE_M`（`AP_LABEL` / `AP_DISTANCE_M` で別にもできる）。**距離が空のままだと位置推定に使われない**ので、入口からの距離を入れる。カメラは生存通知に自分の AP の BSSID（`ap_mac`）を入れるので、「カメラの設定」と「ESP32 AP」表の**どちらで変えても同じ距離になる**（`supabase/cameras.sql` の `ap_mac` 列が必要）
+- 送信出力は `AP_TX_POWER_DBM`（既定 8.5dBm、ESP32 AP と同じ）。ESP32 は1つの電波で両方をこなすため、**上り回線（テザリング）への電波も同じ出力になる**。映像が途切れるなら 11〜15 に上げる
+- チャンネルは上り回線（テザリング）と同じになり、ESP32 AP のように 1/6/11 で分けられない（ESP32 の仕様）
+- 自分の Wi-Fi の名前（`LOCAL_AP_SSID`）はカメラごとに変える
 
 ## 準備（1回だけ）
 
@@ -41,8 +49,11 @@ ESP32 カメラ ──(インターネットにつながる Wi-Fi)──> Vercel
 4. 書き込んでシリアルモニタ（115200bps）を開く
    - `[CAM] sensor PID 0x..., format JPEG` または `format RGB565 -> JPEG` … どちらの撮り方になったか（下の「JPEG で撮れないカメラ」）
    - `[CAM] ready (PSRAM yes)` … カメラ OK
+   - `[AP] SSID=...  BSSID=...` … 位置推定用の AP OK（`ENABLE_AP_BEACON 1` のとき）
    - `[LOCAL] SSID=... http://192.168.4.1` … 近くで見る画面 OK（`ENABLE_LOCAL_VIEW 1` のとき）
    - `[POLL] 200 {...}` … サーバーとつながった
+   - `[HB] 200 {"message":"ok","registered":true}` … ESP32 AP 表に登録された（2回目以降は `false`）
+   - ボードに USB-C が2つある場合、ログが出るのは ESP32-S3 本体の USB 側（`USB CDC On Boot: Enabled` のため）。UART 側（CH343 など）からも書き込みはできるが、ログは出ない
 
 ### CameraWebServer からの変更点
 - まず **JPEG（VGA 640×480）** で撮ろうとする。クラウドへ送るには JPEG が必要

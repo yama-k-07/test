@@ -1004,6 +1004,12 @@ def load_camera(camera_id):
         return None
 
 
+def camera_ap_node(row, nodes_by_mac):
+    """カメラが兼ねている ESP32 AP（ap_nodes の行）。cameras.ap_mac が無い・未登録なら None"""
+    mac = norm_mac((row or {}).get('ap_mac'))
+    return nodes_by_mac.get(mac) if mac else None
+
+
 def camera_watching(row):
     """誰かが今このカメラを見ているか（watch_until が未来）"""
     ts = parse_ts((row or {}).get('watch_until'))
@@ -1032,13 +1038,24 @@ def camera_poll():
     payload = {'camera_id': camera_id, 'last_seen': now_iso(), 'fw': str(data.get('fw') or '')[:32] or None}
     if isinstance(data.get('rssi'), int):
         payload['wifi_rssi'] = data['rssi']
+    ap_mac = str(data.get('ap_mac') or '').upper()
+    if _MAC_RE.match(ap_mac):
+        payload['ap_mac'] = ap_mac   # このカメラが兼ねている AP（距離は ap_nodes と連動させる）
     if row is None:
         payload['label'] = str(data.get('label') or '')[:32] or camera_id
         d = data.get('distance_m')
         payload['distance_m'] = float(d) if isinstance(d, (int, float)) else None
         payload['enabled'] = True
     try:
-        supabase.table(TABLE_CAMERAS).upsert(payload).execute()
+        try:
+            supabase.table(TABLE_CAMERAS).upsert(payload).execute()
+        except Exception as e:
+            if 'ap_mac' not in payload:
+                raise
+            # supabase/cameras.sql の ap_mac 列をまだ足していない DB でも動かす
+            print(f"camera poll without ap_mac ({camera_id}): {e}")
+            payload.pop('ap_mac')
+            supabase.table(TABLE_CAMERAS).upsert(payload).execute()
     except Exception as e:
         print(f"Error saving camera poll {camera_id}: {e}")
         return jsonify({'error': 'カメラ情報の保存に失敗しました（supabase/cameras.sql は実行済みですか？）'}), 500
@@ -1086,13 +1103,22 @@ def camera_frame_upload():
 @login_required
 def handle_cameras():
     """カメラの一覧と設定。GET は online（CAMERA_ONLINE_SEC 以内に連絡あり）と watching 付き。
-    POST {camera_id, label?, distance_m?, enabled?} で設定変更、DELETE {camera_id} で削除。"""
+    POST {camera_id, label?, distance_m?, enabled?} で設定変更、DELETE {camera_id} で削除。
+    カメラが AP を兼ねている（ap_mac が ap_nodes にある）ときは、距離は ap_nodes の値を正とする:
+    GET はその距離を返し（distance_source='ap'）、POST の distance_m は ap_nodes にも書く。"""
     if request.method == 'GET':
         try:
             rows = supabase.table(TABLE_CAMERAS).select("*").execute().data or []
         except Exception as e:
             print(f"Error loading cameras: {e}")
             rows = []
+        nodes_by_mac = {norm_mac(n.get('mac')): n for n in load_ap_nodes() if n.get('mac')}
+        for r in rows:
+            node = camera_ap_node(r, nodes_by_mac)
+            if node is not None:
+                r['distance_m'] = node.get('distance_m')
+                r['distance_source'] = 'ap'
+                r['ap_label'] = node.get('label')
         rows.sort(key=lambda r: (r.get('distance_m') is None, r.get('distance_m') or 0, r.get('camera_id')))
         for r in rows:
             r['online'] = is_recent(r.get('last_seen'), CAMERA_ONLINE_SEC)
@@ -1127,6 +1153,12 @@ def handle_cameras():
         return jsonify({'error': '変更する項目がありません'}), 400
     try:
         supabase.table(TABLE_CAMERAS).update(update).eq('camera_id', camera_id).execute()
+        if 'distance_m' in update:
+            # AP を兼ねるカメラなら、位置推定に使う ap_nodes の距離も同じ値にする
+            nodes_by_mac = {norm_mac(n.get('mac')): n for n in load_ap_nodes() if n.get('mac')}
+            node = camera_ap_node(load_camera(camera_id), nodes_by_mac)
+            if node is not None:
+                supabase.table(TABLE_AP_NODES).update({'distance_m': update['distance_m']}).eq('mac', node['mac']).execute()
         return jsonify({'message': 'saved'})
     except Exception as e:
         print(f"Error updating camera {camera_id}: {e}")
