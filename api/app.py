@@ -42,6 +42,12 @@ TABLE_DEVICE_FIRE_ALERTS = "device_fire_alerts"
 TABLE_AP_NODES = "ap_nodes"
 # ESP32 カメラ（firmware/esp32cam_uplink）。スキーマと Storage バケットは supabase/cameras.sql。
 TABLE_CAMERAS = "cameras"
+# ウォッチのスキャン結果（RSSI 上位3つの MAC と RSSI）。Wi-Fi と BLE で別テーブル。
+# 位置推定の方式の設定（1行だけ: id=1）と、現地での比較記録。スキーマは supabase/scan_reports.sql。
+TABLE_WIFI_SCAN = "wifi_reports_v2"
+TABLE_BLE_SCAN = "ble_reports"
+TABLE_POSITION_SETTINGS = "position_settings"
+TABLE_POSITION_EVAL = "position_eval"
 
 entry_status_table = []
 last_seen_dict = {}
@@ -361,8 +367,9 @@ def weighted_median(samples):
 
 
 def smooth_distance_m(samples, outlier_m):
-    """samples: [(distance_m, age_sec)]（age は最新レポートからの経過秒）→ 平滑化した距離[m]"""
-    weighted = [(d, 0.5 ** (age / SMOOTHING_HALF_LIFE_SEC)) for d, age in samples]
+    """samples: [(distance_m, age_sec)] または [(distance_m, age_sec, weight)]
+    （age は最新レポートからの経過秒、weight は Wi-Fi / BLE の比重）→ 平滑化した距離[m]"""
+    weighted = [(x[0], (x[2] if len(x) > 2 else 1.0) * 0.5 ** (x[1] / SMOOTHING_HALF_LIFE_SEC)) for x in samples]
     if len(weighted) == 1:
         return weighted[0][0]
     med = weighted_median(weighted)
@@ -387,6 +394,194 @@ def load_recent_wifi_reports(window_sec=SMOOTHING_WINDOW_SEC * 2):
     except Exception as e:
         print(f"Error loading recent wifi_reports: {e}")
         return []
+
+
+# ==========================================
+#  位置推定の方式（①〜④）
+# ==========================================
+# ウォッチのスキャン 1 回分（scan）: {'t': datetime, 'source': 'wifi'|'ble', 'aps': [(mac, rssi|None), ...]}
+#   aps は電波の強い順。旧 wifi_reports は RSSI が無い（None）。
+# 1回のスキャン → 距離:   'top2'（上位2つを MAC01_WEIGHT で内分）/ 'rssi'（RSSI の差で隣の AP との間に置く）
+# 時間でならす:            'basic'（今までの平滑化）/ 'series'（カルマンフィルタ＋歩く速さの上限）
+# この組み合わせで 4 方式。画面・エリアボード・火災通知に使うのは position_settings で選んだ 1 つだけ。
+POSITION_METHODS = [
+    ('top2_basic', '① 上位2つ＋今までの平滑化'),
+    ('top2_series', '② 上位2つ＋時系列（カルマン）'),
+    ('rssi_basic', '③ RSSI の差＋今までの平滑化'),
+    ('rssi_series', '④ RSSI の差＋時系列（カルマン）'),
+]
+POSITION_METHOD_KEYS = [k for k, _ in POSITION_METHODS]
+DEFAULT_POSITION_METHOD = 'top2_basic'   # 今までと同じ結果
+
+# ③: RSSI の差から、強い AP(a) と次の AP(b) の間のどこにいるかを出す（距離減衰 RSSI = P0 - 10·n·log10(r)）。
+#   RSSI_a - RSSI_b = 10·n·log10(r_b / r_a)、r_a + r_b = |d_a - d_b| として r_a を解く。
+#   n はトンネルの減衰の係数（自由空間 2、トンネルは 1.5〜3 程度。現地の記録で決める）。
+#   差を使うので、機種ごとの出力（P0）の違いは打ち消し合う。
+PATH_LOSS_N = 2.0
+
+# Wi-Fi と BLE の比重。basic では重みの掛け算、series では測定のばらつき（AP 間隔に対する割合）として使う。
+# 値は仮置き。position_eval の記録を見て決める。
+SOURCE_WEIGHT = {'wifi': 1.0, 'ble': 1.0}
+SOURCE_SIGMA_SPACINGS = {'wifi': 0.35, 'ble': 0.25}
+
+# ②④: カルマンフィルタ（1次元、位置だけ）。人の速さを超える飛びは捨てる。
+SERIES_WINDOW_SEC = 60        # この秒数分のスキャンを使う
+SERIES_MAX_SAMPLES = 60
+SERIES_WALK_MPS = 1.5         # 位置のゆらぎ（人が歩く速さ）[m/s]
+SERIES_MAX_SPEED_MPS = 3.0    # これを超える速さでしか説明できない飛びは捨てる [m/s]
+SERIES_GATE_SIGMA = 3.0       # 予測から 3σ を超えた値は捨てる
+SERIES_RESET_AFTER = 3        # 続けてこの回数捨てたら、本当に動いたとみなして新しい値から始め直す
+
+# 新しい表（wifi_reports_v2 / ble_reports）で、最後に AP が分かったスキャンがこれより古ければ「今どこか分からない」
+SCAN_STALE_SEC = 2 * SMOOTHING_HALF_LIFE_SEC
+
+
+def scan_top2_m(scan, ap_map):
+    """上位2つの既知 AP を MAC01_WEIGHT で内分（旧 report_distance_m と同じ計算）。分からなければ None"""
+    ds = [ap_map.distance(mac) for mac, _ in scan['aps']]
+    ds = [d for d in ds if d is not None][:2]
+    if len(ds) == 2:
+        return MAC01_WEIGHT * ds[0] + (1 - MAC01_WEIGHT) * ds[1]
+    return ds[0] if ds else None
+
+
+def scan_rssi_m(scan, ap_map):
+    """RSSI の差で、いちばん強い既知 AP と 2 番目の既知 AP の間に置く。RSSI が無ければ top2 と同じ"""
+    known = [(ap_map.distance(mac), rssi) for mac, rssi in scan['aps'] if ap_map.distance(mac) is not None]
+    if not known:
+        return None
+    if len(known) == 1 or any(r is None for _, r in known[:2]):
+        return scan_top2_m(scan, ap_map)
+    (da, ra), (db, rb) = known[0], known[1]
+    span = abs(db - da)
+    if span <= 0:
+        return da
+    k = 10 ** ((ra - rb) / (10 * PATH_LOSS_N))   # r_b / r_a（a が強いほど大きい）
+    r_a = span / (1 + k)
+    return da + (r_a if db > da else -r_a)
+
+
+SCAN_ESTIMATORS = {'top2': scan_top2_m, 'rssi': scan_rssi_m}
+
+
+def series_distance_m(points, ap_map):
+    """points: [(t_sec, distance_m, source)] を古い順に、1次元カルマンフィルタでならした最新の距離[m]"""
+    x = P = None
+    last_t = None
+    rejected = 0
+    for t, z, source in points:
+        R = (SOURCE_SIGMA_SPACINGS.get(source, 0.35) * ap_map.spacing) ** 2
+        if x is None:
+            x, P, last_t = z, R, t
+            continue
+        dt = max(0.0, t - last_t)
+        P_pred = P + (SERIES_WALK_MPS * dt) ** 2
+        innov = z - x
+        S = P_pred + R
+        too_far = innov * innov > (SERIES_GATE_SIGMA ** 2) * S and abs(innov) > SERIES_MAX_SPEED_MPS * dt + ap_map.spacing * 0.5
+        if too_far:
+            rejected += 1
+            if rejected < SERIES_RESET_AFTER:
+                continue
+            x, P, last_t, rejected = z, R, t, 0   # 続けて外れる＝本当に動いた
+            continue
+        rejected = 0
+        K = P_pred / S
+        x = x + K * innov
+        P = (1 - K) * P_pred
+        last_t = t
+    return x
+
+
+def _scan_rows_to_scans(rows, source, with_rssi):
+    scans = []
+    for row in rows or []:
+        t = parse_ts(row.get('scanned_at')) or parse_ts(row.get('created_at'))
+        if t is None:
+            continue
+        aps = []
+        for i in ('01', '02', '03'):
+            mac = row.get(f'mac{i}')
+            if not mac:
+                continue
+            rssi = row.get(f'rssi{i}') if with_rssi else None
+            aps.append((mac, rssi if isinstance(rssi, (int, float)) else None))
+        if with_rssi:
+            aps.sort(key=lambda a: -(a[1] if a[1] is not None else -999))   # 念のため強い順に並べ直す
+        scans.append({'device_id': row.get('device_id'), 't': t, 'source': source, 'aps': aps})
+    return scans
+
+
+def load_recent_scan_reports(table, window_sec):
+    """新しい表（wifi_reports_v2 / ble_reports）の直近 window_sec 秒分。テーブルが無ければ空"""
+    since = (datetime.now(timezone.utc) - timedelta(seconds=window_sec)).isoformat()
+    try:
+        return (
+            supabase.table(table)
+            .select("device_id, scanned_at, created_at, mac01, rssi01, mac02, rssi02, mac03, rssi03")
+            .gte("created_at", since)
+            .order("id", desc=True)
+            .limit(3000)
+            .execute()
+        ).data or []
+    except Exception as e:
+        print(f"Error loading {table}: {e}")
+        return []
+
+
+def load_recent_scans():
+    """device_id → スキャンのリスト（新しい順）。新しい表に行がある装置は、旧 wifi_reports を使わない（二重に数えない）"""
+    window = max(SMOOTHING_WINDOW_SEC, SERIES_WINDOW_SEC) * 2
+    new_scans = (_scan_rows_to_scans(load_recent_scan_reports(TABLE_WIFI_SCAN, window), 'wifi', True)
+                 + _scan_rows_to_scans(load_recent_scan_reports(TABLE_BLE_SCAN, window), 'ble', True))
+    by_device = {}
+    for sc in new_scans:
+        if sc['device_id']:
+            by_device.setdefault(sc['device_id'], []).append(sc)
+    legacy = {}
+    for sc in _scan_rows_to_scans(load_recent_wifi_reports(window), 'wifi', False):
+        if sc['device_id'] and sc['device_id'] not in by_device:
+            legacy.setdefault(sc['device_id'], []).append(sc)
+    for scans in by_device.values():
+        scans.sort(key=lambda sc: sc['t'], reverse=True)
+    return by_device, legacy
+
+
+def estimate_methods(scans, ap_map, ref_t):
+    """1台分のスキャン（新しい順）から 4 方式すべての距離[m]。サンプルが無い方式は None"""
+    out = {}
+    for est_name, estimator in SCAN_ESTIMATORS.items():
+        points = []   # (age, distance, source, 新しい方から何番目のスキャンか)
+        for i, sc in enumerate(scans):
+            age = max(0.0, (ref_t - sc['t']).total_seconds())
+            if age > max(SMOOTHING_WINDOW_SEC, SERIES_WINDOW_SEC):
+                continue
+            d = estimator(sc, ap_map)
+            if d is not None:
+                points.append((age, d, sc['source'], i))
+        # basic は今までと同じく「新しい方から SMOOTHING_MAX_SAMPLES 回のスキャン」のうち AP が分かったもの
+        basic = [(d, age, SOURCE_WEIGHT.get(src, 1.0)) for age, d, src, i in points
+                 if i < SMOOTHING_MAX_SAMPLES and age <= SMOOTHING_WINDOW_SEC]
+        out[f'{est_name}_basic'] = smooth_distance_m(basic, ap_map.outlier_m) if basic else None
+        series = sorted(points[:SERIES_MAX_SAMPLES], key=lambda p: -p[0])   # 古い順
+        out[f'{est_name}_series'] = (series_distance_m([(-age, d, src) for age, d, src, _ in series], ap_map)
+                                     if series else None)
+        out[f'{est_name}_samples'] = len(basic)
+    for k in POSITION_METHOD_KEYS:
+        if out.get(k) is not None:
+            out[k] = round(ap_map.clamp(out[k]), 1)
+    return out
+
+
+def load_position_method():
+    """画面で選んだ方式（position_settings id=1）。テーブルが無い・未設定なら DEFAULT_POSITION_METHOD"""
+    try:
+        row = (supabase.table(TABLE_POSITION_SETTINGS).select("method").eq("id", 1).execute().data or [None])[0]
+    except Exception as e:
+        print(f"Error loading position_settings: {e}")
+        row = None
+    method = (row or {}).get('method')
+    return method if method in POSITION_METHOD_KEYS else DEFAULT_POSITION_METHOD
 
 
 def area_centers_m(area_rows, ap_map):
@@ -423,52 +618,59 @@ def area_for_ratio(layout, ratio):
     return layout[-1]['area_id'] if layout else None
 
 
-def estimate_positions(latest_reports, ap_map, area_order, area_rows):
+def estimate_positions(latest_reports, ap_map, area_order, area_rows, method=None):
     """デバイスごとの推定位置を返す。
     戻り値: (positions, layout)
-      positions: {device_id: {'distance_m', 'ratio', 'area_id', 'samples', 'approx'}}（推定できないデバイスは含まない）
+      positions: {device_id: {'distance_m', 'ratio', 'area_id', 'samples', 'approx', 'method', 'methods', 'sources'}}
+        （推定できないデバイスは含まない）
         approx=True は AP の距離では位置が出せず、エリア割当の BSSID 一致だけで決めたもの（ratio はエリアの中央）
+        methods は ①〜④ すべての距離（比較用）。distance_m / ratio / area_id は method（既定は画面で選んだ方式）のもの
       layout: build_area_layout の結果
 
+    使うスキャン: 新しい表（wifi_reports_v2 / ble_reports、RSSI 付き）に行がある装置はそれだけ、
+    無い装置は旧 wifi_reports（RSSI なし。① と ③、② と ④ は同じ値になる）。
+    装置の一覧は latest_reports（旧 wifi_reports の最新行）。
+
     エリアの決め方（上ほど優先）:
-      1. 全エリアの BSSID の距離が分かる → 平滑化した距離に最も近いエリア
+      1. 全エリアの BSSID の距離が分かる → 推定した距離に最も近いエリア
       2. 最新レポートの mac01 / mac02 がエリア割当の BSSID と一致 → そのエリア（従来のエリアボードの方式）
-      3. 平滑化した距離でトンネルを等分したエリア（従来のトンネルマップの方式）"""
+      3. 推定した距離でトンネルを等分したエリア（従来のトンネルマップの方式）"""
+    method = method if method in POSITION_METHOD_KEYS else load_position_method()
     centers = area_centers_m(area_rows, ap_map)
     layout = build_area_layout(area_order, centers, ap_map)
     centered = bool(layout) and all(a in centers for a in area_order)
     bssid_area = {norm_mac(row['bssid']): row['area_id'] for row in (area_rows or []) if row.get('bssid') and row.get('area_id')}
     segment = {seg['area_id']: seg for seg in layout}
-
-    history = {}
-    for row in load_recent_wifi_reports():
-        did = row.get('device_id')
-        if did:
-            history.setdefault(did, []).append(row)
+    new_scans, legacy_scans = load_recent_scans()
 
     positions = {}
     for latest in (latest_reports or []):
         did = latest.get('device_id')
         if not did:
             continue
-        latest_ts = parse_ts(latest.get('created_at'))
-
-        rows = history.get(did) or [latest]
-        samples = []
-        for row in rows[:SMOOTHING_MAX_SAMPLES]:
-            d = report_distance_m(row, ap_map)
-            if d is None:
-                continue
-            ts = parse_ts(row.get('created_at'))
-            age = (latest_ts - ts).total_seconds() if (latest_ts and ts) else 0.0
-            if age < 0 or age > SMOOTHING_WINDOW_SEC:
-                continue
-            samples.append((d, age))
-
         direct_area = bssid_area.get(norm_mac(latest.get('mac01'))) or bssid_area.get(norm_mac(latest.get('mac02')))
 
-        # 最新レポートで AP が分からない時に、古い位置で表示し続けない
-        if report_distance_m(latest, ap_map) is None or not samples:
+        if did in new_scans:
+            scans = new_scans[did]
+            ref_t = scans[0]['t']
+            known_t = next((sc['t'] for sc in scans if scan_top2_m(sc, ap_map) is not None), None)
+            # 最後に AP が分かったスキャンが古ければ、古い位置で表示し続けない
+            fresh = known_t is not None and (ref_t - known_t).total_seconds() <= SCAN_STALE_SEC
+            if known_t is not None:
+                ref_t = known_t
+        else:
+            latest_scan = _scan_rows_to_scans([latest], 'wifi', False)
+            latest_ts = latest_scan[0]['t'] if latest_scan else None
+            scans = legacy_scans.get(did) or latest_scan
+            ref_t = latest_ts or (scans[0]['t'] if scans else None)
+            # 最新レポートで AP が分からない時に、古い位置で表示し続けない（今までと同じ）
+            fresh = report_distance_m(latest, ap_map) is not None
+            if ref_t is not None and latest_ts is not None:
+                scans = [sc for sc in scans if sc['t'] <= latest_ts]
+
+        methods = estimate_methods(scans, ap_map, ref_t) if (scans and ref_t is not None) else {}
+        distance = methods.get(method)
+        if not fresh or distance is None:
             seg = segment.get(direct_area)
             if seg is None:
                 continue
@@ -478,10 +680,12 @@ def estimate_positions(latest_reports, ap_map, area_order, area_rows):
                 'area_id': direct_area,
                 'samples': 0,
                 'approx': True,
+                'method': method,
+                'methods': {k: methods.get(k) for k in POSITION_METHOD_KEYS},
+                'sources': sorted({sc['source'] for sc in scans}) if did in new_scans else ['wifi_legacy'],
             }
             continue
 
-        distance = smooth_distance_m(samples, ap_map.outlier_m)
         ratio = ap_map.to_ratio(distance)
         if centered or not direct_area:
             area_id = area_for_ratio(layout, ratio)
@@ -491,11 +695,13 @@ def estimate_positions(latest_reports, ap_map, area_order, area_rows):
             'distance_m': round(distance, 1),
             'ratio': round(ratio, 4),
             'area_id': area_id,
-            'samples': len(samples),
+            'samples': methods.get(f"{method.split('_')[0]}_samples", 0),
             'approx': False,
+            'method': method,
+            'methods': {k: methods.get(k) for k in POSITION_METHOD_KEYS},
+            'sources': sorted({sc['source'] for sc in scans}) if did in new_scans else ['wifi_legacy'],
         }
     return positions, layout
-
 
 # ==========================================
 #  火災位置
@@ -1240,6 +1446,8 @@ def get_wifi_map():
             'approx': pos['approx'],
             'online': device_id in online_set,
             'fire_message': alert.get('message'),
+            'methods': pos.get('methods'),
+            'sources': pos.get('sources'),
         })
 
     return jsonify({
@@ -1251,12 +1459,101 @@ def get_wifi_map():
         'area_order': area_order,
         'area_layout': layout,
         'online_device_ids': online_device_ids,
+        'position_method': positions_method(positions),
         'fire': {
             'active': fire['active'],
             'distance_m': fire['distance_m'],
             'ratio': round(ap_map.to_ratio(fire["distance_m"]), 4) if fire['active'] else None,
         },
     })
+
+
+def positions_method(positions):
+    """推定に使った方式（装置がいなくても画面に出すため、設定から読む）"""
+    for pos in (positions or {}).values():
+        return pos.get('method')
+    return load_position_method()
+
+
+@app.route('/api/position_settings', methods=['GET', 'POST'])
+@login_required
+def handle_position_settings():
+    """位置推定の方式。GET {method, methods: [{key, label}], ...定数}、POST {method}"""
+    if request.method == 'GET':
+        return jsonify({
+            'method': load_position_method(),
+            'methods': [{'key': k, 'label': label} for k, label in POSITION_METHODS],
+            'path_loss_n': PATH_LOSS_N,
+            'source_weight': SOURCE_WEIGHT,
+        })
+    method = (request.json or {}).get('method')
+    if method not in POSITION_METHOD_KEYS:
+        return jsonify({'error': f'method は {", ".join(POSITION_METHOD_KEYS)} のどれかにしてください'}), 400
+    try:
+        supabase.table(TABLE_POSITION_SETTINGS).upsert({'id': 1, 'method': method, 'updated_at': now_iso()}).execute()
+    except Exception as e:
+        print(f"Error saving position_settings: {e}")
+        return jsonify({'error': '保存に失敗しました（supabase/scan_reports.sql は実行済みですか？）'}), 500
+    return jsonify({'message': 'saved', 'method': method})
+
+
+def summarize_position_eval(rows):
+    """方式ごとの誤差のまとめ（平均・90% 点・件数）"""
+    out = []
+    for key, label in POSITION_METHODS:
+        errs = sorted(abs(r[key] - r['true_distance_m']) for r in rows
+                      if isinstance(r.get(key), (int, float)) and isinstance(r.get('true_distance_m'), (int, float)))
+        out.append({
+            'key': key, 'label': label, 'count': len(errs),
+            'mean_abs_m': round(sum(errs) / len(errs), 1) if errs else None,
+            'p90_abs_m': round(errs[min(len(errs) - 1, int(len(errs) * 0.9))], 1) if errs else None,
+        })
+    return out
+
+
+@app.route('/api/position_eval', methods=['GET', 'POST', 'DELETE'])
+@login_required
+def handle_position_eval():
+    """現地での比較記録。POST {device_id, true_distance_m, note?} で、その時点の ①〜④ の推定を正しい位置と一緒に保存。
+    GET は方式ごとの誤差のまとめと直近の記録、DELETE は全記録の削除。"""
+    if request.method == 'GET':
+        try:
+            rows = supabase.table(TABLE_POSITION_EVAL).select("*").order("id", desc=True).limit(2000).execute().data or []
+        except Exception as e:
+            print(f"Error loading position_eval: {e}")
+            rows = []
+        return jsonify({'summary': summarize_position_eval(rows), 'recent': rows[:20]})
+
+    if request.method == 'DELETE':
+        try:
+            supabase.table(TABLE_POSITION_EVAL).delete().gte('id', 0).execute()
+        except Exception as e:
+            print(f"Error deleting position_eval: {e}")
+            return jsonify({'error': '削除に失敗しました'}), 500
+        return jsonify({'message': 'deleted'})
+
+    data = request.json or {}
+    device_id = str(data.get('device_id') or '')
+    try:
+        true_m = float(data.get('true_distance_m'))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'true_distance_m（入口からの正しい距離 m）を数値で指定してください'}), 400
+    reports = [r for r in (load_wifi_reports() or []) if r.get('device_id') == device_id]
+    if not reports:
+        return jsonify({'error': 'その装置のレポートがありません'}), 404
+    positions, _ = estimate_positions(reports, load_ap_map(), load_area_order(), load_area_table())
+    pos = positions.get(device_id)
+    if pos is None:
+        return jsonify({'error': '今はこの装置の位置が出せません（AP が見えていない）'}), 409
+    row = {'device_id': device_id, 'true_distance_m': true_m, 'method_selected': pos.get('method'),
+           'sources': ','.join(pos.get('sources') or []), 'note': str(data.get('note') or '')[:200] or None}
+    row.update({k: (pos.get('methods') or {}).get(k) for k in POSITION_METHOD_KEYS})
+    try:
+        supabase.table(TABLE_POSITION_EVAL).insert(row).execute()
+    except Exception as e:
+        print(f"Error saving position_eval: {e}")
+        return jsonify({'error': '保存に失敗しました（supabase/scan_reports.sql は実行済みですか？）'}), 500
+    return jsonify({'message': 'saved', 'row': row})
 
 
 @app.route('/api/fire_location', methods=['GET', 'POST', 'DELETE'])

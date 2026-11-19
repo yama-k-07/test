@@ -1031,3 +1031,29 @@ input[type="checkbox"]:checked {
   font-size: 15px;
   color: var(--ink);
 }
+
+/* 位置推定の方式（作業者ポップアップの「推定の比較」） */
+.worker-popup-methods {
+  margin-top: 6px;
+  font-size: 13px;
+}
+.worker-popup-methods summary {
+  cursor: pointer;
+  color: var(--ink);
+}
+.worker-popup-methods .table {
+  margin: 4px 0;
+  font-size: 13px;
+  background: transparent;
+}
+.worker-popup-methods tr.is-selected-method td {
+  font-weight: bold;
+}
+.worker-popup-eval {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.worker-popup-eval .input {
+  width: 80px;
+}

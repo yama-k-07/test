@@ -236,6 +236,35 @@
       </div>
     </section>
 
+    <section class="box">
+      <h2 class="subtitle">位置推定の方式</h2>
+      <p class="section-hint">マップ・エリア・火災の通知に使う計算方法を選びます。①〜④ は裏で同時に計算しているので、作業者アイコンを押すと「推定の比較」で全部の値が見られます。決まった地点に立ち、そこで「正しい位置」を入れて「記録」を押すと、下の表に方式ごとの誤差がたまります。</p>
+      <div class="field has-addons">
+        <div class="control">
+          <div class="select">
+            <select id="positionMethodSelect"></select>
+          </div>
+        </div>
+        <div class="control">
+          <button class="button is-success" onclick="savePositionMethod()">この方式を使う</button>
+        </div>
+      </div>
+      <div class="table-container">
+        <table class="table is-fullwidth">
+          <thead>
+            <tr>
+              <th>方式</th>
+              <th>記録の数</th>
+              <th>平均の誤差</th>
+              <th>誤差の大きい側（90%）</th>
+            </tr>
+          </thead>
+          <tbody id="positionEvalBody"></tbody>
+        </table>
+      </div>
+      <button class="button is-danger is-small is-outlined" onclick="clearPositionEval()">記録をすべて削除</button>
+    </section>
+
 
     <footer class="footer">
       <div class="content has-text-centered">

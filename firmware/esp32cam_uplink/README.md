@@ -12,15 +12,16 @@ ESP32 カメラ ──(インターネットにつながる Wi-Fi)──> Vercel
 
 - **誰かが見ている間だけ送る**: 画面が画像を取りに来ると、サーバーは「見ている」期限（20 秒）を延ばす。カメラは 10 秒ごとの問い合わせの返事で「送って」と言われたら、約 1 秒ごとに JPEG を送る。見る人がいなくなると自動で止まる
 - 映像は **約 1 秒に 1 枚のコマ送り**（動画ではない）。見始めてから映るまで最大 10 秒ほど
-- ESP32 はインターネットにつながる Wi-Fi に**つなぎに行く**。同時に自分の Wi-Fi（`LOCAL_AP_SSID`）も立て、これは「近くで `http://192.168.4.1` を見る画面」（`ENABLE_LOCAL_VIEW 1`）と「位置推定用の AP」（`ENABLE_AP_BEACON 1`）を兼ねる
+- ESP32 はインターネットにつながる Wi-Fi に**つなぎに行く**。`ENABLE_LOCAL_VIEW 1` なら自分の Wi-Fi（`LOCAL_AP_SSID`）も立て、近くで `http://192.168.4.1` を見られる。位置の目印は BLE ビーコン（下）
 
-## 位置推定用の AP を兼ねる（`ENABLE_AP_BEACON 1`、既定）
+## 位置推定用の BLE ビーコンを兼ねる（`ENABLE_AP_BEACON 1`、既定）
 
-- `firmware/esp32s3_ap` と同じく、自分の Wi-Fi の BSSID を 30 秒ごとに `POST /api/ap_heartbeat` で知らせる。サーバー側の変更は無く、ダッシュボードの「**ESP32 AP**」表にカメラが出る（fw 欄は `cam-1.3.0` のように `cam-` 付き）
-- 初回登録時の名前と距離は `CAMERA_LABEL` / `CAMERA_DISTANCE_M`（`AP_LABEL` / `AP_DISTANCE_M` で別にもできる）。**距離が空のままだと位置推定に使われない**ので、入口からの距離を入れる。カメラは生存通知に自分の AP の BSSID（`ap_mac`）を入れるので、「カメラの設定」と「ESP32 AP」表の**どちらで変えても同じ距離になる**（`supabase/cameras.sql` の `ap_mac` 列が必要）
-- 送信出力は `AP_TX_POWER_DBM`（既定 8.5dBm、ESP32 AP と同じ）。ESP32 は1つの電波で両方をこなすため、**上り回線（テザリング）への電波も同じ出力になる**。映像が途切れるなら 11〜15 に上げる
-- チャンネルは上り回線（テザリング）と同じになり、ESP32 AP のように 1/6/11 で分けられない（ESP32 の仕様）
-- 自分の Wi-Fi の名前（`LOCAL_AP_SSID`）はカメラごとに変える
+- 名前 `MAMOTCHI-<CAMERA_ID>` で BLE の広告を 100ms ごとに出す（`firmware/esp32s3_ap` 2.0.0 と同じ）。その **BLE アドレス**を 30 秒ごとに `POST /api/ap_heartbeat` で知らせるので、ダッシュボードの「**ESP32 AP**」表にカメラが出る（fw 欄は `ble-cam-1.4.0`）
+- ウォッチは `MAMOTCHI-` の BLE を RSSI 上位3つで `ble_reports` に送る（[`docs/WATCH_SCAN_REPORTS.md`](../../docs/WATCH_SCAN_REPORTS.md)）。現場の Wi-Fi AP とも併用できる
+- 初回登録時の名前と距離は `CAMERA_LABEL` / `CAMERA_DISTANCE_M`（`AP_LABEL` / `AP_DISTANCE_M` で別にもできる）。**距離が空のままだと位置推定に使われない**ので、入口からの距離を入れる。カメラは生存通知に BLE アドレス（`ap_mac`）を入れるので、「カメラの設定」と「ESP32 AP」表の**どちらで変えても同じ距離になる**（`supabase/cameras.sql` の `ap_mac` 列が必要）
+- 送信出力は `BLE_TX_POWER`（既定 `ESP_PWR_LVL_P3` = +3dBm、全ビーコンで揃える）。Wi-Fi の出力は下げないので、上り回線は弱くならない
+- Wi-Fi と BLE を同時に使うため、Wi-Fi の省電力はオンになる（ESP32 の決まり）
+- 1.3.0（Wi-Fi の BSSID を登録）から入れ替えると、ESP32 AP 表に BLE アドレスの**新しい行**ができる。新しい行に距離を入れ、古い行（fw `cam-1.3.0`）は削除する
 
 ## 準備（1回だけ）
 
@@ -36,8 +37,8 @@ ESP32 カメラ ──(インターネットにつながる Wi-Fi)──> Vercel
    | `camera_pins.h` | ピン配置 |
    | `partitions.csv` | パーティション（アプリ領域 3.75MB） |
    | `app_httpd.cpp`, `camera_index.h` | `ENABLE_LOCAL_VIEW 1` のときだけ。近くで `http://192.168.4.1` を見るための画面 |
-2. `config.example.h` を `config.h` にコピーして書き換える
-   - `CAMERA_ID`: カメラごとに違う名前（英数字・`_`・`-`）
+2. 設定ファイルを作る（**複数台なら「カメラごとの設定ファイル」を使う**。下の節）。1台だけなら `config.example.h` を `config.h` にコピーして書き換えてもよい
+   - `CAMERA_ID`: カメラごとに違う名前（英数字・`_`・`-` で 17 文字まで。BLE の名前 `MAMOTCHI-<ID>` が 26 文字に収まるように）
    - `WIFI_SSID` / `WIFI_PASSWORD`: **インターネットにつながる** 2.4GHz の Wi-Fi（現場の Wi-Fi、モバイルルーター、スマホのテザリング）
    - `AP_TOKEN`: Vercel の `AP_SHARED_TOKEN` と同じ値
    - `ENABLE_LOCAL_VIEW` / `LOCAL_AP_SSID` / `LOCAL_AP_PASSWORD`: 近くでも見るなら 1 と、自分の Wi-Fi の名前・パスワード（今の CameraWebServer で使っているものでよい）
@@ -49,11 +50,33 @@ ESP32 カメラ ──(インターネットにつながる Wi-Fi)──> Vercel
 4. 書き込んでシリアルモニタ（115200bps）を開く
    - `[CAM] sensor PID 0x..., format JPEG` または `format RGB565 -> JPEG` … どちらの撮り方になったか（下の「JPEG で撮れないカメラ」）
    - `[CAM] ready (PSRAM yes)` … カメラ OK
-   - `[AP] SSID=...  BSSID=...` … 位置推定用の AP OK（`ENABLE_AP_BEACON 1` のとき）
+   - `[BLE] name=MAMOTCHI-...  address=...` … 位置推定用の BLE ビーコン OK（`ENABLE_AP_BEACON 1` のとき）
    - `[LOCAL] SSID=... http://192.168.4.1` … 近くで見る画面 OK（`ENABLE_LOCAL_VIEW 1` のとき）
    - `[POLL] 200 {...}` … サーバーとつながった
    - `[HB] 200 {"message":"ok","registered":true}` … ESP32 AP 表に登録された（2回目以降は `false`）
    - ボードに USB-C が2つある場合、ログが出るのは ESP32-S3 本体の USB 側（`USB CDC On Boot: Enabled` のため）。UART 側（CH343 など）からも書き込みはできるが、ログは出ない
+
+## カメラごとの設定ファイル（複数台）
+
+1台ごとに違うのは `CAMERA_ID`・`CAMERA_LABEL`・`CAMERA_DISTANCE_M`・`LOCAL_AP_SSID` だけなので、そこだけをカメラごとのファイルに分ける。どれも Git には入らない（ひな形の `*.example.h` だけ入る）。
+
+| ファイル | 中身 |
+|---|---|
+| `configs/common.h` | 全カメラ共通（Wi-Fi・サーバー・トークン・画質・近くで見る Wi-Fi のパスワード）。`configs/common.example.h` をコピーして作る |
+| `configs/<カメラID>.h` | 1台ごとの4項目と `#include "common.h"`。`configs/camera.example.h` をコピーし、**ファイル名を CAMERA_ID と同じ**にする（例 `cam-03.h`） |
+
+書き込みはリポジトリのいちばん上で:
+
+```bash
+python scripts/flash_camera.py --list
+python scripts/flash_camera.py cam-03 COM9
+```
+
+- `--list` で設定ファイルの一覧と、つながっている ESP32 のポートが出る。`--compile-only` で書き込まずにコンパイルだけ
+- スクリプトはスケッチ一式を作業用フォルダにコピーして、そこでだけ `config.h` を「`#include "<カメラID>.h"`」にする。元のフォルダの `config.h` は使わない・書き換えない
+- `CAMERA_ID` とファイル名が違う、`CAMERA_ID` や `LOCAL_AP_SSID` が他のカメラと同じ、のときは書き込む前に止まる
+- ボード設定（下の 3.）はスクリプトに入っている。arduino-cli は PATH、環境変数 `ARDUINO_CLI`、Arduino IDE 2 の同梱版の順に探す
+- Arduino IDE で書き込むときは `configs/` を使わず、そのカメラの値を `config.h` に直接書く（スクリプトの組み立て方は IDE では再現できないため）
 
 ### CameraWebServer からの変更点
 - まず **JPEG（VGA 640×480）** で撮ろうとする。クラウドへ送るには JPEG が必要
