@@ -11,3 +11,6 @@ firmware/esp32cam_uplink/camera_pins.h
 firmware/esp32cam_uplink/partitions.csv
 firmware/esp32cam_uplink/app_httpd.cpp
 firmware/esp32cam_uplink/camera_index.h
+# カメラごとの設定（パスワード・トークン入り）。ひな形の *.example.h だけ Git に入れる
+firmware/esp32cam_uplink/configs/*.h
+!firmware/esp32cam_uplink/configs/*.example.h

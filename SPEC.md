@@ -128,6 +128,10 @@
 | `TABLE_FIRE_LOCATION` | `fire_location` | `id`（常に 1） | `active`, `distance_m`（入口からの m）, `updated_at` | Flask | Flask |
 | `TABLE_DEVICE_FIRE_ALERTS` | ★`device_fire_alerts` | `device_id` | `fire_active`, `direction`, `distance_m`, `message`, `approx`, `updated_at` | Flask | ウォッチ |
 | `TABLE_AP_NODES` | `ap_nodes` | `mac`（大文字） | `label`, `distance_m`, `enabled`, `fw`, `uptime_s`, `sta_count`, `tx_power_dbm`, `channel`, `uplink_rssi`, `last_seen`, `created_at` | ESP32 ＋ Flask | Flask |
+| `TABLE_WIFI_SCAN` | `wifi_reports_v2` | `id` | `device_id`, `scanned_at`（スキャンした時刻）, `created_at`, `mac01`/`rssi01`〜`mac03`/`rssi03`（RSSI 上位3つ） | ウォッチ | Flask（位置推定） |
+| `TABLE_BLE_SCAN` | `ble_reports` | `id` | 同上（`MAMOTCHI-` の BLE ビーコンだけ） | ウォッチ | Flask（位置推定） |
+| `TABLE_POSITION_SETTINGS` | `position_settings` | `id`（=1） | `method`（`top2_basic` / `top2_series` / `rssi_basic` / `rssi_series`）, `updated_at` | Flask | Flask |
+| `TABLE_POSITION_EVAL` | `position_eval` | `id` | `device_id`, `true_distance_m`, `method_selected`, `sources`, `top2_basic`, `top2_series`, `rssi_basic`, `rssi_series`, `note`, `created_at` | Flask | Flask |
 | `TABLE_CAMERAS` | `cameras` | `camera_id` | `label`, `distance_m`, `enabled`, `ap_mac`（兼ねている AP の BSSID）, `fw`, `wifi_rssi`, `width`, `height`, `frame_bytes`, `last_seen`, `last_frame_at`, `watch_until`, `created_at` | ESP32 カメラ ＋ Flask | Flask |
 
 - `area_status_v2` は「エリアと BSSID の対応」「エリアの指示・火災フラグ」「並び順」の3役を1テーブルで兼ね、3つの API（`/api/area`、`/api/area_status`、`/api/area_order`）がそれぞれ別の列を部分 upsert する。
@@ -214,6 +218,11 @@
 | `GET /api/cameras` | 🔒 | 全カメラ＋`online`（60 秒以内に連絡）＋`watching`。`ap_mac` が `ap_nodes` にあるカメラは `distance_m` を **ap_nodes の距離で返し**、`distance_source: 'ap'`・`ap_label` を付ける |
 | `POST /api/cameras` | 🔒 | `{camera_id, label?, distance_m?, enabled?}`。AP を兼ねるカメラの `distance_m` は `ap_nodes` にも書く（距離は1つに揃う） |
 | `DELETE /api/cameras` | 🔒 | `{camera_id}` |
+| `GET /api/position_settings` | 🔒 | `{method, methods: [{key, label}], path_loss_n, source_weight}` |
+| `POST /api/position_settings` | 🔒 | `{method}`（①〜④ のどれか）。マップ・エリア・火災通知に使う方式を変える |
+| `GET /api/position_eval` | 🔒 | 方式ごとの誤差のまとめ `summary: [{key, label, count, mean_abs_m, p90_abs_m}]` と直近 20 件 `recent` |
+| `POST /api/position_eval` | 🔒 | `{device_id, true_distance_m, note?}`。その時点の ①〜④ の推定を正しい位置と一緒に保存 |
+| `DELETE /api/position_eval` | 🔒 | 記録をすべて削除 |
 | `GET /api/camera_frame/<camera_id>` | 🔒 | 最新の JPEG（`X-Frame-At` に撮影時刻）。画像がまだ無ければ 204（`X-Camera-Status: waking`）。**呼ぶたびに「見ている」期限 `watch_until` を延ばす**（残り半分を切ったときだけ書く） |
 
 ### 5.5 エラーの形
@@ -244,6 +253,24 @@
 
 ### 6.3 位置推定 `estimate_positions()`
 トンネルマップとエリアボードは**同じ関数**の結果を使う。
+
+**方式は4つ**（2026-11-19〜）。全部を同時に計算し（`estimate_methods`）、画面・エリア・火災通知に使うのは「位置推定の方式」欄で選んだ1つ（`position_settings.method`、既定 `top2_basic` ＝ 今までと同じ）。作業者ポップアップの「推定の比較」で4つとも見られる。
+
+| 方式 | 1回のスキャン → 距離 | 時間でならす |
+|---|---|---|
+| ① `top2_basic` | `scan_top2_m`: 上位2つの既知 AP を 0.8 : 0.2 | `smooth_distance_m`（下の手順、30 秒・8 回） |
+| ② `top2_series` | `scan_top2_m` | `series_distance_m`: 1次元カルマンフィルタ（60 秒・60 回まで） |
+| ③ `rssi_basic` | `scan_rssi_m`: RSSI の差で強い2つの AP の間に置く | `smooth_distance_m` |
+| ④ `rssi_series` | `scan_rssi_m` | `series_distance_m` |
+
+- **使うスキャン**（`load_recent_scans`）: 新しい表 `wifi_reports_v2` / `ble_reports`（RSSI 上位3つ）に行がある装置はそれだけを使い、無い装置は旧 `wifi_reports`（RSSI なし。① = ③、② = ④ になる）。装置の一覧は旧 `wifi_reports` の最新行のまま（移行中はウォッチが両方に送る。`docs/WATCH_SCAN_REPORTS.md`）。
+- **③ の計算**: 強い AP を a、次の AP を b とし、距離減衰 `RSSI = P0 − 10·n·log10(r)` から `RSSI_a − RSSI_b = 10·n·log10(r_b / r_a)`、`r_a + r_b = |d_a − d_b|` を解いて `d_a` から `r_a` だけ b 側に置く。`PATH_LOSS_N = 2.0`（仮置き、現地の記録で決める）。差を使うので機種ごとの出力の違いは打ち消し合う。例: 100m が -60dBm・200m が -70dBm → 約 124m。RSSI が無いスキャンは ① と同じ
+- **② ④ の計算**: 位置のゆらぎ `SERIES_WALK_MPS = 1.5` m/s、測定のばらつき = `SOURCE_SIGMA_SPACINGS`（Wi-Fi 0.35・BLE 0.25）× AP 間隔。予測から 3σ を超え、かつ `SERIES_MAX_SPEED_MPS = 3` m/s でも届かない飛びは捨てる。3 回続けて外れたら本当に動いたとみなし、新しい値から始め直す
+- **Wi-Fi と BLE の比重**: basic は `SOURCE_WEIGHT`（今はどちらも 1.0）を重みに掛け、series は上のばらつきで自然に重み付けされる。値は `position_eval` の記録で決める
+- **古い位置を出さない**: 新しい表の装置は、最後に AP が分かったスキャンが最新のスキャンより `SCAN_STALE_SEC`（16 秒）以上古ければ位置を出さない。旧形式の装置は今まで通り（最新レポートで AP が分からなければ出さない）
+- **現地での比較**: ポップアップで正しい位置を入れて「記録」→ `position_eval` に ①〜④ と一緒に保存。「位置推定の方式」欄に方式ごとの平均誤差・90% 点が出る
+
+以下は ① の手順（旧形式のデータでは変更前とまったく同じ結果になることを、200 通りの乱数データで確認済み）。
 
 | 定数 | 値 | 意味 |
 |---|---|---|
@@ -346,12 +373,13 @@
 | エリア割当設定 | `#areaTableBody` | `loadAreaMapTable` / `saveAreaMapTable` / `removeAreaRow` | `/api/area` |
 | ユーザー設定 | `#userTableBody` | `loadUserTable` / `saveUserTable` / `removeRow` | `/api/user` |
 | ESP32 AP | `#apNodesTableBody` | `loadApNodesTable` / `saveApNode` / `deleteApNode` | `/api/ap_nodes` |
+| 位置推定の方式（ESP32 AP の下） | `#positionMethodSelect`, `#positionEvalBody` | `loadPositionSettings` / `savePositionMethod` / `loadPositionEval` / `clearPositionEval`。作業者ポップアップの「推定の比較」は `positionMethodsHtml` / `recordPositionEval` | `/api/position_settings`, `/api/position_eval` |
 | カメラ（トンネルマップの下） | `#cameraGrid`, `#cameraSettingsBody` | `loadCameras` / `startCameraView` / `stopCameraView` / `fetchCameraFrame` / `saveCamera` / `deleteCamera` | `/api/cameras`, `/api/camera_frame/<id>` |
 | フッター | LOGOUT ボタン | | `/logout` |
 
 ### 7.2 更新の仕組み
 - **読み込み時**（`DOMContentLoaded`）に全セクションを1回読む。トンネルマップのクリック操作と Realtime 購読もここで始める。
-- **5 秒ごと**（`setInterval`）に `loadAreaBoard`、`loadAreaMapTable`、`loadUserTable`、`loadEntryManagement`、`loadApNodesTable`、`loadCameras`、`loadTunnelMap` を呼ぶ。AP位置設定とプリセット一覧は読み込み時だけ。
+- **5 秒ごと**（`setInterval`）に `loadAreaBoard`、`loadAreaMapTable`、`loadUserTable`、`loadEntryManagement`、`loadApNodesTable`、`loadCameras`、`loadPositionSettings`、`loadPositionEval`、`loadTunnelMap` を呼ぶ。AP位置設定とプリセット一覧は読み込み時だけ。
 - **Realtime**：anon key で `latest_wifi_reports` の変更を購読し、変更が来たら `loadTunnelMap()`。Supabase 側で Realtime が有効でないと何も起きない（エラーにもならない）。
 - **ちらつき防止**：表やカードは、前回の応答（`JSON.stringify`）を `last*Sig` に覚えておき、同じなら描き直さない。マップは毎回描き直す。
 - **入力中は止める**：`input` / `select` にフォーカスがある間は `isEditing=true` になり、定期更新を丸ごと止める。カードのドラッグ中は `isSorting`。
@@ -439,33 +467,31 @@
 
 ---
 
-## 8. ESP32-S3 AP（`firmware/esp32s3_ap/`）
+## 8. ESP32-S3 ビーコン（`firmware/esp32s3_ap/`、旧 ESP32-S3 AP）
 
 ### 8.1 役割
-トンネルに並べる**位置の目印**。ウォッチは接続せず、スキャンして BSSID を拾うだけなので、ウォッチ側の送信形式は変わらない。
+トンネルに並べる**位置の目印**。2.0.0 から **BLE ビーコン**（1.x は Wi-Fi softAP）。現場の Wi-Fi AP（既設6台）と併用する。ウォッチは接続せず、スキャンしてアドレスを拾うだけ。ウォッチは BLE のスキャンを RSSI 上位3つで `ble_reports` に送り、移行中の `wifi_reports` には「`MAMOTCHI-` の BLE が見えれば BLE の上位2つ、見えなければ Wi-Fi の上位2つ」を入れる（`docs/WATCH_SCAN_REPORTS.md`、位置の計算は §6.3）。
 
 ### 8.2 動作（`esp32s3_ap.ino`）
 
 | 処理 | 内容 |
 |---|---|
-| 起動 | 上り回線の設定があれば `WIFI_AP_STA`、無ければ `WIFI_AP`。省電力オフ（`WiFi.setSleep(false)`） |
-| softAP | `WiFi.softAP("MAMOTCHI-<AP_LABEL>", AP_PASSWORD, AP_CHANNEL, 0, 1)`（公開・接続上限1）。BSSID は `WiFi.softAPmacAddress()` |
-| 送信出力 | `WiFi.setTxPower()`。`TX_POWER_DBM` に一番近いそれ以下の段階を選ぶ（-1〜21 dBm） |
+| BLE | `BLEDevice::init("MAMOTCHI-<AP_LABEL>")` → `BLEDevice::setPower(BLE_TX_POWER)`（既定 +3dBm）→ 広告間隔 `BLE_INTERVAL_MS`（既定 100ms）で `BLEDevice::startAdvertising()`。アドレスは `BLEDevice::getAddress()`（ESP32 固有、大文字にして送る）。Arduino-ESP32 3.3.13 の S3 は NimBLE |
+| 起動 | 上り回線の設定があれば `WIFI_STA`（`ENABLE_WIFI_AP 1` なら `WIFI_AP_STA`）。Wi-Fi と BLE を同時に使うため省電力はオン（`WiFi.setSleep(true)`、ESP32 の共存の決まり） |
+| Wi-Fi softAP（任意） | `ENABLE_WIFI_AP 1` のときだけ従来どおり `MAMOTCHI-<AP_LABEL>` を立てる。位置の目印としては登録しない |
 | 上り回線 | `WiFi.begin(UPLINK_SSID, UPLINK_PASSWORD)`、切れたら 15 秒ごとに再接続 |
-| heartbeat | 上り回線がつながっていれば 30 秒ごとに `POST {SERVER_BASE_URL}/api/ap_heartbeat`（`X-AP-Token`）。中身は MAC・表示名・距離・FW 版・稼働秒・接続台数・出力・チャンネル・上り回線の RSSI |
+| heartbeat | 上り回線がつながっていれば 30 秒ごとに `POST {SERVER_BASE_URL}/api/ap_heartbeat`（`X-AP-Token`）。`mac` は **BLE アドレス**、ほかに表示名・距離・FW 版（`ble-2.0.0`）・稼働秒・BLE 出力[dBm]・チャンネル・上り回線の RSSI |
 | TLS | `SERVER_ROOT_CA` を設定すればその証明書で検証、無ければ検証しない（`setInsecure()`、試験用） |
 
-上り回線につなぐと、softAP のチャンネルは上り回線に合わせて変わる（ESP32 の仕様）。
-
 ### 8.3 1台ごとの設定（`config.h`。`config.example.h` をコピーして作る。Git 管理外）
-`AP_LABEL`（例 `A050`）、`AP_DISTANCE_M`（初回登録の初期値）、`AP_CHANNEL`（隣どうしで 1/6/11）、`AP_PASSWORD`、`TX_POWER_DBM`（既定 8.5）、`UPLINK_SSID` / `UPLINK_PASSWORD`、`SERVER_BASE_URL`、`AP_TOKEN`、任意で `SERVER_ROOT_CA`。
+`AP_LABEL`（例 `A050`、英数字 17 文字まで）、`AP_DISTANCE_M`（初回登録の初期値）、`BLE_TX_POWER`（全台で揃える）、`BLE_INTERVAL_MS`、`ENABLE_WIFI_AP`（既定 0。1 のとき `AP_CHANNEL` / `AP_PASSWORD` / `TX_POWER_DBM`）、`UPLINK_SSID` / `UPLINK_PASSWORD`、`SERVER_BASE_URL`、`AP_TOKEN`、任意で `SERVER_ROOT_CA`。
 
 ### 8.4 導入手順
 1. `supabase/ap_nodes.sql` を実行し、Vercel に `AP_SHARED_TOKEN` を設定する。
 2. Arduino IDE に「esp32 by Espressif Systems」を入れ、ボードは ESP32S3 Dev Module を選ぶ。
 3. `config.h` を作って書き込む。
 4. 電源を入れると「ESP32 AP」表に出るので、距離を確認して保存する。
-5. 上り回線が無い場合は、シリアル（115200bps）に出る BSSID を「AP位置設定」に手で登録する。この場合は6か所・100m 間隔の位置番号しか選べない。
+5. 上り回線が無い場合は、シリアル（115200bps）に出る BLE の `address` を「AP位置設定」に手で登録する。1.x（Wi-Fi）から入れ替えると「ESP32 AP」表に BLE アドレスの新しい行ができるので、距離を入れて古い行を削除する。この場合は6か所・100m 間隔の位置番号しか選べない。
 
 使っている Arduino-ESP32 の API は、公式ドキュメントと `WiFiGeneric.h` / `WiFiType.h` / `WiFiScan.h` で存在を確認済み。2026-11-18 に Arduino-ESP32 3.3.13（ESP32S3 Dev Module、標準パーティション）で**コンパイル成功**（フラッシュ 75%・RAM 14%。機能を足すならパーティションを広げる）。実機での動作はまだ確認していない。
 
@@ -478,7 +504,7 @@
 - **画面**: カメラごとにタイル（名前・距離・稼働中/停止・映像・撮影時刻と遅れ）。「映像を見る」を押したタイルだけ取得し、タブが隠れている間は取りに行かない。10 分で自動停止。設定（名前・距離・受け取る/受け取らない・削除）は欄の下の「カメラの設定」
 - **定数**（`app.py`）: `CAMERA_WATCH_SEC=20`、`CAMERA_IDLE_POLL_SEC=10`、`CAMERA_FRAME_INTERVAL_MS=1000`、`CAMERA_ONLINE_SEC=60`、`CAMERA_MAX_FRAME_BYTES=600KB`
 - **近くで見る（任意）**: `ENABLE_LOCAL_VIEW 1` で自分の Wi-Fi も立て（AP+STA）、CameraWebServer の `app_httpd.cpp` の画面を `http://192.168.4.1` で同時に出す。同じカメラを使うので両方見るとコマ数は落ちる
-- **firmware**: 実機は ESP32-S3-EYE（`CAMERA_MODEL_ESP32S3_EYE`、上下反転を補正）。CameraWebServer の `board_config.h` / `camera_pins.h` / `partitions.csv`（と、近くで見るなら `app_httpd.cpp` / `camera_index.h`）をコピーして使う（Git には入れない）。自分の Wi-Fi（`LOCAL_AP_SSID`）を立てて**位置推定用の AP を兼ねる**（`ENABLE_AP_BEACON 1`、既定）：その BSSID を 30 秒ごとに `/api/ap_heartbeat` へ送り（§8.2 の ESP32 AP と同じ項目、fw は `cam-1.3.0`）、`ap_nodes` に登録される。生存通知に `ap_mac` を入れるので、カメラ欄の距離と「ESP32 AP」表の距離は連動する（正は `ap_nodes.distance_m`。どちらの表で変えても同じ値になる）。送信出力は `AP_TX_POWER_DBM`（既定 8.5dBm、上り回線も同じ出力）、チャンネルは上り回線と同じ。画像はまず JPEG・VGA で撮り、センサーが JPEG 非対応（`esp_camera_init` が `0x106`）なら RGB565（`RGB_FRAME_SIZE` 既定 QVGA）で撮り直して `frame2jpg`（`RGB_JPEG_QUALITY` 既定 60）で JPEG に変換して送る（FW 1.2.0）。ボード設定は ESP32S3 Dev Module・OPI PSRAM・Custom パーティション。`config.h` に `CAMERA_ID`、Wi-Fi、`AP_TOKEN`、画像サイズ（既定 VGA）と画質（既定 14）。`esp_camera_*` と HTTPClient の API は公式ソースで確認済み。2026-11-18 に Arduino-ESP32 3.3.13（ESP32S3 Dev Module・OPI PSRAM・Custom パーティション）で、近くで見る画面あり（約 1.15MB）・なし（約 1.08MB）の両方とも**コンパイル成功**。同日、実機（ESP32-S3-EYE、センサー PID 0x9b＝JPEG 非対応のため RGB565→JPEG 変換で動作）をテザリング経由でつなぎ、本番ダッシュボードで**映像が見えることを確認**
+- **firmware**: 実機は ESP32-S3-EYE（`CAMERA_MODEL_ESP32S3_EYE`、上下反転を補正）。CameraWebServer の `board_config.h` / `camera_pins.h` / `partitions.csv`（と、近くで見るなら `app_httpd.cpp` / `camera_index.h`）をコピーして使う（Git には入れない）。**位置推定用の BLE ビーコンを兼ねる**（`ENABLE_AP_BEACON 1`、既定、FW 1.4.0）：名前 `MAMOTCHI-<CAMERA_ID>` で広告し、BLE アドレスを 30 秒ごとに `/api/ap_heartbeat` へ送り（§8.2 と同じ項目、fw は `ble-cam-1.4.0`）、`ap_nodes` に登録される。生存通知に `ap_mac`（BLE アドレス）を入れるので、カメラ欄の距離と「ESP32 AP」表の距離は連動する（正は `ap_nodes.distance_m`。どちらの表で変えても同じ値になる）。BLE の出力は `BLE_TX_POWER`（既定 +3dBm）。Wi-Fi の出力は下げない。自分の Wi-Fi（`LOCAL_AP_SSID`）は近くで見る画面専用。画像はまず JPEG・VGA で撮り、センサーが JPEG 非対応（`esp_camera_init` が `0x106`）なら RGB565（`RGB_FRAME_SIZE` 既定 QVGA）で撮り直して `frame2jpg`（`RGB_JPEG_QUALITY` 既定 60）で JPEG に変換して送る（FW 1.2.0）。ボード設定は ESP32S3 Dev Module・OPI PSRAM・Custom パーティション。`config.h` に `CAMERA_ID`、Wi-Fi、`AP_TOKEN`、画像サイズ（既定 VGA）と画質（既定 14）。`esp_camera_*` と HTTPClient の API は公式ソースで確認済み。2026-11-18 に Arduino-ESP32 3.3.13（ESP32S3 Dev Module・OPI PSRAM・Custom パーティション）で、近くで見る画面あり（約 1.15MB）・なし（約 1.08MB）の両方とも**コンパイル成功**。同日、実機（ESP32-S3-EYE、センサー PID 0x9b＝JPEG 非対応のため RGB565→JPEG 変換で動作）をテザリング経由でつなぎ、本番ダッシュボードで**映像が見えることを確認**
 - **回線の目安**: 見ている間 1 時間に 70〜180MB、見ていない間は 10 秒ごとの小さな問い合わせだけ
 - **導入**: `supabase/cameras.sql` を実行 → Vercel に `AP_SHARED_TOKEN` → firmware を書き込む（`firmware/esp32cam_uplink/README.md`）
 - サーバー側は Supabase を偽物に差し替えたテスト（20 項目）で、登録・送信の開始と停止・保存・閲覧・認証を確認済み
@@ -489,7 +515,8 @@
 
 | 方向 | 対象 | 内容 |
 |---|---|---|
-| ウォッチ → | `wifi_reports` | `device_id`, `mac01`（**最も強い AP**）, `mac02`（2番目）, `report`, `created_at`。位置推定の重み 0.8 はこの順番が前提 |
+| ウォッチ → | `wifi_reports` | `device_id`, `mac01`（**最も強い AP／ビーコン**）, `mac02`（2番目）, `report`, `created_at`。位置推定の重み 0.8 はこの順番が前提。`MAMOTCHI-` の BLE ビーコンが見えれば BLE の上位2つ、見えなければ Wi-Fi の上位2つ（1回の報告に混ぜない。`docs/WATCH_SCAN_REPORTS.md`） |
+| ウォッチ → | `wifi_reports_v2` / `ble_reports` | `device_id`, `scanned_at`, `mac01`/`rssi01`〜`mac03`/`rssi03`。Wi-Fi のスキャンと `MAMOTCHI-` の BLE のスキャンを別の表に 1 回 1 行（`docs/WATCH_SCAN_REPORTS.md`、`supabase/scan_reports.sql`） |
 | → ウォッチ | `device_instructions` | `instruction ∈ {none, wait, inward, outward}`（個別指示） |
 | → ウォッチ | `device_fire_alerts` | 自分の `device_id` の行。`direction ∈ {inward, outward, near, unknown}`、`message` はそのまま表示できる文（§6.7） |
 | → ウォッチ（可能性） | `area_status_v2` / ログイン不要の API | `/api/area_status`、`/api/user`、`/api/area`、`/api/area_order`、`/api/entry_status`。ウォッチが使っているかはコードから確定できない |
@@ -588,5 +615,8 @@
 | 2026-09〜10 | #17（`feature/16-404-問題`） | ファイル整理、`index.py` → `api/app.py`、Vercel のルーティング修正。パフォーマンス修正（`738626b`）は差し戻し |
 | 2026-10-11 | #25 | マップから個別指示、位置推定の一本化と平滑化、UI 改善、火災位置の通知、ログイン画面、仕様書・CodeQL 指摘の修正 |
 | 2026-11-11 | #26 | AP を 100m 間隔に修正、`ApMap`、ESP32-S3 AP（heartbeat・管理画面・ファームウェア）、AGENTS.md ほか開発支援。**本番デプロイは失敗中** |
+| 2026-11-18 | #28〜#30 | ESP32 カメラ（外から見るコマ送り、RGB565→JPEG 変換）、カメラが位置の目印を兼ね距離を ESP32 AP 表と連動 |
+| 2026-11-19 | — | ウォッチのスキャンを RSSI 上位3つで `wifi_reports_v2` / `ble_reports` に。位置推定を ①〜④ の4方式にし、画面で切り替え・現地で比較記録 |
+| 2026-11-18 | — | ESP32 の位置の目印を BLE ビーコンに（`esp32s3_ap` 2.0.0、カメラ 1.4.0）。ウォッチは BLE 優先・無ければ Wi-Fi（`docs/WATCH_SCAN_REPORTS.md`） |
 
 旧ブランチ: `feature/5-位置の推定`、`feature/6-コードのネーミング見直し`、`feature/7-コードの整合性1`（`tests/test_index.py` あり）、`feature/9-エリアカードの表記`、`feature/10-エリアカードの並び`、`feature/12-テーブルの統合`、`kosen_map`、`kosen_map_b`、`dev/Ryo`、`#34`。

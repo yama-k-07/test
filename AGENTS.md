@@ -19,7 +19,7 @@ Galaxy Watch ──(mac01, mac02)──> Supabase: wifi_reports
                      Flask (api/app.py) が位置推定・入退場判定・火災の方向計算
                                      │
           ダッシュボード (index.html + admin.js)   ウォッチ ← device_instructions / device_fire_alerts
-ESP32-S3 AP ──heartbeat──> /api/ap_heartbeat ──> Supabase: ap_nodes
+ESP32-S3 ビーコン（BLE）──heartbeat──> /api/ap_heartbeat ──> Supabase: ap_nodes
 ```
 
 - 本番: https://test-fawn-iota-73.vercel.app/ （Vercel。`main` に入ると自動デプロイ）
@@ -38,7 +38,8 @@ ESP32-S3 AP ──heartbeat──> /api/ap_heartbeat ──> Supabase: ap_nodes
 | `api/static/admin.js` | **ダッシュボードの動きのすべて**。API 呼び出し・表の描画・トンネルマップ（Canvas） |
 | `api/static/style.css` | 見た目。末尾の「見やすさ調整」ブロック以降が現行の上書き |
 | `supabase/*.sql` | 追加したテーブルの定義（Supabase の SQL Editor で実行） |
-| `firmware/esp32s3_ap/` | ESP32-S3 AP のファームウェア（`.ino`、`config.example.h`、README） |
+| `firmware/esp32s3_ap/` | ESP32-S3 ビーコン（BLE、旧 AP）のファームウェア（`.ino`、`config.example.h`、README） |
+| `docs/WATCH_SCAN_REPORTS.md` | ウォッチ側の決まり（Wi-Fi と BLE のスキャンを RSSI 上位3つで `wifi_reports_v2` / `ble_reports` へ。移行中の `wifi_reports` の入れ方も） |
 | `firmware/esp32cam_uplink/` | ESP32 カメラのファームウェア（外から見られるコマ送り。`.ino`、`config.example.h`、README） |
 | `SPEC.md` | 現状仕様（データモデル・API 一覧・計算式・画面の仕組み） |
 | `vercel.json`（`api/` 内）, `requirements.txt` | デプロイ設定と Python 依存 |
@@ -66,6 +67,7 @@ ESP32-S3 AP ──heartbeat──> /api/ap_heartbeat ──> Supabase: ap_nodes
 | 入退場の表 | `admin.js` の `loadEntryManagement` / `renderEntryCurrentTable` / `renderEntryLogTable` |
 | AP位置設定・プリセット | `admin.js` の `loadApPositionsTable` / `saveApPositionsTable` / `loadApPreset` / `saveApPreset`。選択肢は `AP_LABELS` / `AP_POSITION_DISTANCES_M` |
 | ESP32 AP の表 | `admin.js` の `loadApNodesTable` / `saveApNode` / `deleteApNode` |
+| 位置推定の方式の切り替え・比較の表 | `admin.js` の `loadPositionSettings` / `savePositionMethod` / `loadPositionEval` / `clearPositionEval`、ポップアップの `positionMethodsHtml` / `recordPositionEval` |
 | カメラの映像・設定の表 | `admin.js` の `loadCameras` / `startCameraView` / `fetchCameraFrame` / `saveCamera`。取得間隔・自動停止は `CAMERA_FRAME_INTERVAL_MS` / `CAMERA_AUTO_STOP_MS` |
 | ユーザー・エリア割当の表 | `admin.js` の `loadUserTable` / `saveUserTable`、`loadAreaMapTable` / `saveAreaMapTable` |
 | 色・文字サイズ・余白 | `style.css` 末尾の「見やすさ調整」ブロック。状態色は `--state-*` |
@@ -75,7 +77,8 @@ ESP32-S3 AP ──heartbeat──> /api/ap_heartbeat ──> Supabase: ap_nodes
 
 | やりたいこと | 編集する場所 |
 |---|---|
-| 位置推定の計算を変える | `estimate_positions`（全体の流れ）、`report_distance_m`（1回分の距離、`MAC01_WEIGHT`）、`smooth_distance_m`（平滑化）、定数 `SMOOTHING_*` / `OUTLIER_SPACINGS` |
+| 位置推定の計算を変える | `estimate_positions`（全体の流れ）、`estimate_methods`（①〜④）、`scan_top2_m` / `scan_rssi_m`（1回分の距離、`MAC01_WEIGHT` / `PATH_LOSS_N`）、`smooth_distance_m`（今までの平滑化）、`series_distance_m`（カルマン、`SERIES_*`）、Wi-Fi と BLE の比重 `SOURCE_WEIGHT` / `SOURCE_SIGMA_SPACINGS`、定数 `SMOOTHING_*` / `OUTLIER_SPACINGS` |
+| 位置推定の方式を足す・名前を変える | `app.py` の `POSITION_METHODS`、`admin.js` の `POSITION_METHOD_SHORT`、`supabase/scan_reports.sql` の `position_eval` の列 |
 | AP の距離・台数を変える | 既設6台: `AP_LABELS` / `AP_DISTANCES_M`（`admin.js` の同名定数も）。ESP32 AP: 画面の「ESP32 AP」表で設定（コード変更不要） |
 | AP の距離の出どころ・トンネルの両端・間隔 | `class ApMap` と `load_ap_map` |
 | エリアの決め方 | `build_area_layout` / `area_for_ratio` / `area_centers_m`、`estimate_positions` 内の優先順位 |
@@ -91,9 +94,11 @@ ESP32-S3 AP ──heartbeat──> /api/ap_heartbeat ──> Supabase: ap_nodes
 
 | やりたいこと | 編集する場所 |
 |---|---|
-| 1台ごとの設定（表示名・距離・チャンネル・出力・Wi-Fi） | `config.h`（`config.example.h` をコピーして作る） |
-| SSID の付け方・送信出力の扱い | `esp32s3_ap.ino` の `startAccessPoint` / `applyTxPower` |
+| 1台ごとの設定（表示名・距離・BLE 出力・Wi-Fi） | `config.h`（`config.example.h` をコピーして作る） |
+| BLE ビーコンの名前・出力・間隔 | `esp32s3_ap.ino` の `startBleBeacon`（カメラは `esp32cam_uplink.ino` の同名関数）。名前の頭 `MAMOTCHI-` はウォッチとの約束 |
+| 従来の Wi-Fi softAP | `esp32s3_ap.ino` の `startWifiAccessPoint`（`ENABLE_WIFI_AP 1` のときだけ） |
 | heartbeat の内容・間隔 | `esp32s3_ap.ino` の `sendHeartbeat` / `HEARTBEAT_INTERVAL_MS`（サーバー側 `ap_heartbeat` と項目を揃える） |
+| カメラを増やす・カメラごとの設定 | `firmware/esp32cam_uplink/configs/<カメラID>.h`（1台ごと）と `configs/common.h`（共通）。書き込みは `python scripts/flash_camera.py <カメラID> <ポート>`（`scripts/flash_camera.py`） |
 | カメラの画像サイズ・画質・送り方 | `firmware/esp32cam_uplink/config.h` の `FRAME_SIZE` / `JPEG_QUALITY`、`esp32cam_uplink.ino` の `initCamera` / `sendFrame` / `sendPoll`。ピンは CameraWebServer からコピーした `board_config.h` / `camera_pins.h` |
 
 ---
@@ -101,11 +106,12 @@ ESP32-S3 AP ──heartbeat──> /api/ap_heartbeat ──> Supabase: ap_nodes
 ## 4. 守るルール
 
 - **ウォッチ（Galaxy Watch）側のコードはこのリポジトリに無い。** 次の列名・値・API の形はウォッチとの約束なので、**勝手に変えない**（変えるなら先に人間に確認）:
-  - テーブル `wifi_reports` / `latest_wifi_reports` / `area_status_v2` / `device_instructions` / `device_fire_alerts`
+  - テーブル `wifi_reports` / `wifi_reports_v2` / `ble_reports` / `latest_wifi_reports` / `area_status_v2` / `device_instructions` / `device_fire_alerts`
   - `device_fire_alerts.direction` の値 `inward / outward / near / unknown`
   - ログイン不要の API（`/api/area_status`、`/api/user`、`/api/area`、`/api/area_order`、`/api/entry_status`）
 - 位置推定は `estimate_positions` に**一本化**されている（マップもエリアボードも同じ結果）。別の計算を足さない。
-- `MAC01_WEIGHT = 0.8` は「mac01 が最も強い AP」というウォッチの仕様が前提。
+- `MAC01_WEIGHT = 0.8` は「mac01 が最も強い AP／ビーコン」というウォッチの仕様が前提。BLE の名前の頭 `MAMOTCHI-` と、`wifi_reports_v2` / `ble_reports` の列（`scanned_at`、`mac01`/`rssi01`〜`mac03`/`rssi03`）もウォッチとの約束（`docs/WATCH_SCAN_REPORTS.md`）。
+- 位置推定の方式は ①〜④ の4つで、すべて `estimate_positions` の中（`estimate_methods`）で計算する。画面に使うのは `position_settings` で選んだ1つ。新しい方式を足すときも `POSITION_METHODS` に足し、`estimate_positions` の外に別の計算を作らない。
 - AP の距離と表示名は `app.py` と `admin.js` の**両方**にある（`AP_LABELS` / `AP_DISTANCES_M` ↔ `AP_LABELS` / `AP_POSITION_DISTANCES_M`）。片方だけ変えない。同様に指示の値（`DEVICE_INSTRUCTIONS` ↔ `DEVICE_INSTRUCTION_LABELS`）。
 - MAC の比較は `norm_mac` で大文字に揃えてから行う（Android は小文字、ESP32 は大文字）。
 - **画面の定期更新パターン**: 5 秒ポーリング＋前回と同じ内容なら再描画しない（`last*Sig`）＋入力中は更新しない（`isEditing`）。新しい表もこれに合わせる。

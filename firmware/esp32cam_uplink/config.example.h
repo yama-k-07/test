@@ -24,13 +24,13 @@
 #define LOCAL_AP_SSID      "ここに自分の Wi-Fi 名"
 #define LOCAL_AP_PASSWORD  "ここに 8 文字以上のパスワード"
 
-// ---- 位置推定用の AP を兼ねる（firmware/esp32s3_ap と同じ役目）----
-// 1 にすると、上の自分の Wi-Fi（LOCAL_AP_SSID）の BSSID を 30 秒ごとにサーバーへ知らせる（/api/ap_heartbeat）。
-// ダッシュボードの「ESP32 AP」表に出るので、そこで距離を確かめて位置推定に使う。
 // 自分の Wi-Fi の名前はカメラごとに変える（同じ名前が2つあると近くで見るときに混線する）。
+
+// ---- 位置推定用の BLE ビーコンを兼ねる（firmware/esp32s3_ap と同じ役目）----
+// 1 にすると、名前 "MAMOTCHI-<CAMERA_ID>" で BLE の広告を出し、その BLE アドレスを 30 秒ごとに
+// サーバーへ知らせる（/api/ap_heartbeat）。ダッシュボードの「ESP32 AP」表に出るので、そこで距離を確かめる。
 #define ENABLE_AP_BEACON  1
-#define AP_TX_POWER_DBM   8.5   // esp32s3_ap と同じ既定値。上り回線（テザリング）の電波もこの出力になるので、
-                                // つながりにくければ 11〜15 に上げる（他の AP より強く見えて位置がずれやすくなる）
+#define BLE_TX_POWER      ESP_PWR_LVL_P3   // +3dBm。全ビーコンで揃える（esp32s3_ap と同じ既定値）
 // #define AP_LABEL       "入口カメラ"   // ESP32 AP 表の名前。省略すると CAMERA_LABEL
 // #define AP_DISTANCE_M  0.0           // 省略すると CAMERA_DISTANCE_M
 

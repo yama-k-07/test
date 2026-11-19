@@ -254,20 +254,25 @@ function openWorkerPopup(worker) {
         <button type="button" class="button ${o.value === current ? 'is-link' : ''}" data-instruction="${o.value}">${o.label}</button>
       `).join('')}
     </div>
+    ${positionMethodsHtml(worker)}
   `;
 
   popup.querySelector('.worker-popup-close').addEventListener('click', closeWorkerPopup);
+  const evalBtn = popup.querySelector('[data-position-eval]');
+  if (evalBtn) {
+    evalBtn.addEventListener('click', () => recordPositionEval(worker.device_id, popup));
+  }
   popup.querySelectorAll('[data-instruction]').forEach(btn => {
     btn.addEventListener('click', async () => {
       const instruction = btn.dataset.instruction;
-      popup.querySelectorAll('button').forEach(b => { b.disabled = true; });
+      popup.querySelectorAll('[data-instruction]').forEach(b => { b.disabled = true; });
       const ok = await saveDeviceInstruction(worker.device_id, instruction);
       if (ok) {
         deviceInstructionMap[worker.device_id] = instruction;
         if (lastWifiMapData) renderTunnelMap(lastWifiMapData);
         closeWorkerPopup();
       } else {
-        popup.querySelectorAll('button').forEach(b => { b.disabled = false; });
+        popup.querySelectorAll('[data-instruction]').forEach(b => { b.disabled = false; });
       }
     });
   });
@@ -291,6 +296,154 @@ function closeWorkerPopup() {
   if (popupDeviceId === null) return;
   popupDeviceId = null;
   if (lastWifiMapData) renderTunnelMap(lastWifiMapData);
+}
+
+// ======== 位置推定の方式（①〜④）と現地での比較 ========
+const POSITION_METHOD_SHORT = {
+  top2_basic: '① 上位2つ',
+  top2_series: '② 上位2つ＋時系列',
+  rssi_basic: '③ RSSI',
+  rssi_series: '④ RSSI＋時系列',
+};
+const POSITION_SOURCE_LABELS = { wifi: 'Wi-Fi', ble: 'BLE', wifi_legacy: 'Wi-Fi（旧形式・RSSI なし）' };
+
+// 作業者ポップアップに出す ①〜④ の推定と「正しい位置を記録」欄
+function positionMethodsHtml(worker) {
+  const methods = worker.methods || {};
+  const selected = lastWifiMapData?.position_method;
+  const rows = Object.keys(POSITION_METHOD_SHORT).map(key => {
+    const v = methods[key];
+    const text = v === null || v === undefined ? '—' : `${Math.round(v)}m`;
+    return `<tr class="${key === selected ? 'is-selected-method' : ''}"><td>${POSITION_METHOD_SHORT[key]}</td><td>${text}</td></tr>`;
+  }).join('');
+  const sources = (worker.sources || []).map(s => POSITION_SOURCE_LABELS[s] || s).join('・');
+  return `
+    <details class="worker-popup-methods">
+      <summary>推定の比較${sources ? `（${escapeHtml(sources)}）` : ''}</summary>
+      <table class="table is-narrow"><tbody>${rows}</tbody></table>
+      <div class="worker-popup-eval">
+        <label>正しい位置 <input class="input is-small" type="number" min="0" step="1" data-eval-true placeholder="m"></label>
+        <button type="button" class="button is-small is-info" data-position-eval>記録</button>
+      </div>
+    </details>
+  `;
+}
+
+async function recordPositionEval(deviceId, popup) {
+  const input = popup.querySelector('[data-eval-true]');
+  const text = input ? input.value.trim() : '';
+  if (text === '' || isNaN(Number(text))) {
+    alert('今立っている位置（入口からの m）を入れてください');
+    return;
+  }
+  try {
+    const res = await fetch('/api/position_eval', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ device_id: deviceId, true_distance_m: Number(text) })
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      alert('記録できませんでした: ' + (body.error || res.status));
+      return;
+    }
+    input.value = '';
+    lastPositionEvalSig = null;
+    loadPositionEval();
+    alert(`記録しました（正しい位置 ${Math.round(Number(text))}m）`);
+  } catch (e) {
+    console.error('recordPositionEval error:', e);
+    alert('記録できませんでした');
+  }
+}
+
+let lastPositionSettingsSig = null;
+let lastPositionEvalSig = null;
+
+async function loadPositionSettings() {
+  const select = document.getElementById('positionMethodSelect');
+  if (!select) return;
+  try {
+    const res = await fetch('/api/position_settings');
+    if (!res.ok) return;
+    const data = await res.json();
+    const sig = JSON.stringify([data.method, data.methods]);
+    if (sig === lastPositionSettingsSig) return;
+    lastPositionSettingsSig = sig;
+    select.innerHTML = (data.methods || []).map(m =>
+      `<option value="${escapeHtml(m.key)}" ${m.key === data.method ? 'selected' : ''}>${escapeHtml(m.label)}</option>`
+    ).join('');
+  } catch (e) {
+    console.error('loadPositionSettings error:', e);
+  }
+}
+
+async function savePositionMethod() {
+  const select = document.getElementById('positionMethodSelect');
+  if (!select) return;
+  try {
+    const res = await fetch('/api/position_settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ method: select.value })
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      alert('保存に失敗しました: ' + (body.error || res.status));
+      return;
+    }
+  } catch (e) {
+    console.error('savePositionMethod error:', e);
+    alert('保存に失敗しました');
+    return;
+  } finally {
+    isEditing = false;
+  }
+  lastPositionSettingsSig = null;
+  loadPositionSettings();
+  loadTunnelMap();
+}
+
+async function loadPositionEval() {
+  const body = document.getElementById('positionEvalBody');
+  if (!body) return;
+  try {
+    const res = await fetch('/api/position_eval');
+    if (!res.ok) return;
+    const data = await res.json();
+    const sig = JSON.stringify(data.summary);
+    if (sig === lastPositionEvalSig) return;
+    lastPositionEvalSig = sig;
+    const fmt = v => (v === null || v === undefined ? '—' : `${v}m`);
+    body.innerHTML = (data.summary || []).map(s => `
+      <tr>
+        <td>${escapeHtml(s.label)}</td>
+        <td>${s.count}</td>
+        <td>${fmt(s.mean_abs_m)}</td>
+        <td>${fmt(s.p90_abs_m)}</td>
+      </tr>
+    `).join('');
+  } catch (e) {
+    console.error('loadPositionEval error:', e);
+  }
+}
+
+async function clearPositionEval() {
+  if (!confirm('比較の記録をすべて削除します。元に戻せません。よろしいですか？')) return;
+  try {
+    const res = await fetch('/api/position_eval', { method: 'DELETE' });
+    if (!res.ok) {
+      const b = await res.json().catch(() => ({}));
+      alert('削除に失敗しました: ' + (b.error || res.status));
+      return;
+    }
+  } catch (e) {
+    console.error('clearPositionEval error:', e);
+    alert('削除に失敗しました');
+    return;
+  }
+  lastPositionEvalSig = null;
+  loadPositionEval();
 }
 
 function initTunnelMapInteraction() {
@@ -943,6 +1096,8 @@ document.addEventListener('DOMContentLoaded', () => {
   loadApPresetList();
   loadApNodesTable();
   loadCameras();
+  loadPositionSettings();
+  loadPositionEval();
   loadEntryManagement();
   initTunnelMapInteraction();
 
@@ -954,6 +1109,8 @@ document.addEventListener('DOMContentLoaded', () => {
     loadEntryManagement();
     loadApNodesTable();
     loadCameras();
+    loadPositionSettings();
+    loadPositionEval();
     loadTunnelMap();
   }, 5000);
 });
@@ -1235,6 +1392,9 @@ function renderTunnelMap(data) {
     device_id: w.device_id,
     username: w.username,
     fire_message: w.fire_message,
+    distance_m: w.distance_m,
+    methods: w.methods,
+    sources: w.sources,
     cx: w.cx,
     cy: w.cy,
     r: R,

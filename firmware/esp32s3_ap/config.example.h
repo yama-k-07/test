@@ -2,16 +2,21 @@
 // config.h はパスワードとトークンを含むので Git に入れない（.gitignore 済み）。
 #pragma once
 
-// ---- この AP の設置情報（1台ごとに変える） ----
-#define AP_LABEL        "A050"      // 表示名。SSID は "MAMOTCHI-A050" になる
+// ---- このビーコンの設置情報（1台ごとに変える） ----
+#define AP_LABEL        "A050"      // 表示名。BLE の名前は "MAMOTCHI-A050" になる（英数字で 17 文字まで）
 #define AP_DISTANCE_M   50.0        // 入口からの距離[m]。初回登録時の初期値（以後は管理画面で変更）
-#define AP_CHANNEL      1           // 隣り合う AP で 1 / 6 / 11 を順に使うと混信しにくい（上り回線ありの場合は無視される）
 
-// ---- softAP ----
-#define AP_PASSWORD     "change-me-8chars"   // 8 文字以上。ウォッチは接続しないので共通で構わない
-#define TX_POWER_DBM    8.5                  // 送信出力[dBm]。-1〜21。トンネルでは低めから試す
+// ---- BLE ビーコン ----
+#define BLE_TX_POWER    ESP_PWR_LVL_P3   // +3dBm。ESP_PWR_LVL_N0（0dBm）〜 ESP_PWR_LVL_P9（+9dBm）を目安に。全台で揃える
+#define BLE_INTERVAL_MS 100              // 広告の間隔[ms]
 
-// ---- 上り回線とサーバー（無ければ "" のままで AP だけ動く） ----
+// ---- 従来の Wi-Fi softAP（使わないなら 0 のまま） ----
+#define ENABLE_WIFI_AP  0
+#define AP_CHANNEL      1                    // ENABLE_WIFI_AP 1 のときだけ使う
+#define AP_PASSWORD     "change-me-8chars"   // ENABLE_WIFI_AP 1 のときだけ使う（8 文字以上）
+#define TX_POWER_DBM    8.5                  // ENABLE_WIFI_AP 1 のときの Wi-Fi 出力[dBm]
+
+// ---- 上り回線とサーバー（無ければ "" のままでビーコンだけ動く） ----
 #define UPLINK_SSID      ""                  // 現場の Wi-Fi
 #define UPLINK_PASSWORD  ""
 #define SERVER_BASE_URL  "https://test-fawn-iota-73.vercel.app"
