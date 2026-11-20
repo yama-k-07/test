@@ -3,7 +3,6 @@ let isSorting = false;
 let lastWifiMapData = null;
 
 // ちらつき防止用: 前回取得データとの差分がない場合は再描画をスキップする
-let lastAreaMapSig = null;
 let lastUserListSig = null;
 let lastEntryStatusSig = null;
 let lastEntryLogSig = null;
@@ -750,79 +749,7 @@ async function saveUserTable() {
 }
 
 
-// ======== エリア状態管理 ========
-async function loadAreaTable() {
-  if (isEditing || isSorting) return;
-  const res = await fetch('/api/area_status');
-  const areaList = await res.json();
-  const body = document.getElementById('areaTableBody');
-  if (!body) return;
-
-  // 現在の編集中データを保存しておく (area_id -> {instruction, fire})
-  const current = {};
-  Array.from(body.querySelectorAll('tr')).forEach(r => {
-    const inputs = r.querySelectorAll('input, select');
-    if (inputs.length >= 3) {
-      const aid = inputs[0].value;
-      current[aid] = { instruction: inputs[1].value, fire: inputs[2].checked };
-    }
-  });
-
-  body.innerHTML = '';
-
-  areaList.forEach(item => {
-    const row = document.createElement('tr');
-    const use = current[item.area_id] || { instruction: item.instruction, fire: item.fire };
-    row.innerHTML = `
-      <td><input class="input" type="text" value="${escapeHtml(item.area_id)}" disabled></td>
-      <td>
-        <select class="select">
-          <option value="none" ${use.instruction === 'none' ? 'selected' : ''}>none</option>
-          <option value="waiting" ${use.instruction === 'waiting' ? 'selected' : ''}>waiting</option>
-          <option value="evacuate_exit" ${use.instruction === 'evacuate_exit' ? 'selected' : ''}>evacuate_exit</option>
-          <option value="evacuate_upwind" ${use.instruction === 'evacuate_upwind' ? 'selected' : ''}>evacuate_upwind</option>
-          <option value="alert" ${use.instruction === 'alert' ? 'selected' : ''}>alert</option>
-        </select>
-      </td>
-      <td><input type="checkbox" ${use.fire ? 'checked' : ''}></td>
-      <td><button class="button is-danger" onclick="removeRow(this)">削除</button></td>
-    `;
-    body.appendChild(row);
-  });
-}
-
-// ======== エリア状態保存 ========
-async function saveAreaTable() {
-  const body = document.getElementById('areaTableBody');
-  if (!body) return;
-
-  const rows = body.querySelectorAll('tr');
-  const areaData = Array.from(rows).map(row => {
-    const inputs = row.querySelectorAll('input, select');
-    return {
-      area_id: inputs[0].value,
-      instruction: inputs[1].value,
-      fire: inputs[2].checked
-    };
-  });
-
-  try {
-    const res = await fetch('/api/area_status', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(areaData)
-    });
-
-    if (res.ok) {
-      alert('エリア状態を保存しました');
-      await loadAreaTable(); // 更新
-    } else {
-      console.error('エリア状態の保存に失敗しました', await res.text());
-    }
-  } catch (error) {
-    console.error('エリア状態保存エラー:', error);
-  }
-}
+// 「エリア割当設定」の表は 2026-11-21 に削除（エリアの BSSID の割当はサーバーと DB に残る。/api/area）
 
 // ======== 入場状態表示 ========
 async function loadEntryTable() {
@@ -852,105 +779,6 @@ async function loadEntryTable() {
     console.error('入場状態取得エラー:', error);
   }
 }
-
-async function loadAreaMapTable() {
-  const body = document.getElementById('areaTableBody');
-  if (!body || isEditing) return;
-
-  let list;
-  try {
-    const res = await fetch('/api/area');
-    if (!res.ok) {
-      console.error('loadAreaMapTable: APIエラー', res.status);
-      return;
-    }
-    list = await res.json();
-  } catch (e) {
-    console.error('loadAreaMapTable fetch error:', e);
-    return;
-  }
-  if (!Array.isArray(list)) {
-    console.error('loadAreaMapTable: 想定外のレスポンス形式', list);
-    return;
-  }
-
-  const sig = JSON.stringify(list);
-  if (sig === lastAreaMapSig) return;
-  lastAreaMapSig = sig;
-
-  body.innerHTML = '';
-
-  list.forEach(item => {
-    const row = document.createElement('tr');
-    row.dataset.originalArea = item.area_id || '';
-    row.innerHTML = `
-      <td><input class="input" type="text" value="${escapeHtml(item.area_id)}"></td>
-      <td><input class="input" type="text" value="${escapeHtml(item.bssid)}"></td>
-      <td><button class="button is-danger" onclick="removeAreaRow(this)">削除</button></td>
-    `;
-    body.appendChild(row);
-  });
-}
-
-function addAreaRow() {
-  const body = document.getElementById('areaTableBody');
-  const row = document.createElement('tr');
-  row.innerHTML = `
-    <td><input class="input" placeholder="area_id"></td>
-    <td><input class="input" placeholder="bssid"></td>
-    <td><button class="button is-danger" onclick="removeAreaRow(this)">削除</button></td>
-  `;
-  body.appendChild(row);
-}
-
-async function saveAreaMapTable() {
-  const rows = document.querySelectorAll('#areaTableBody tr');
-
-  const errors = [];
-  for (const row of rows) {
-    const inputs = row.querySelectorAll('input');
-    const areaId = inputs[0] ? inputs[0].value.trim() : '';
-    if (!areaId) continue;
-
-    const data = { area_id: areaId, bssid: inputs[1] ? inputs[1].value.trim() : '' };
-
-    const res = await fetch('/api/area', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data)
-    });
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      errors.push(`${areaId}: ${body.error || res.status}`);
-    }
-  }
-
-  if (errors.length > 0) {
-    alert('保存に失敗した項目があります:\n' + errors.join('\n'));
-  } else {
-    alert('エリア・MACアドレス設定を保存しました');
-  }
-  loadAreaMapTable();
-}
-
-function removeAreaRow(button) {
-  const row = button.closest('tr');
-  const area_id = row.dataset.originalArea || row.querySelector('input')?.value;
-  if (!area_id) {
-    row.remove();
-    return;
-  }
-
-  fetch('/api/area', {
-    method: 'DELETE',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ area_id })
-  }).then(res => {
-    if (res.ok) row.remove();
-    else alert('削除失敗');
-  });
-}
-
 
 // ======== 共通 ========
 function removeRow(button) {
@@ -982,7 +810,6 @@ function removeRow(button) {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-  loadAreaMapTable();
   loadUserTable();
   loadTunnelMap();
   initWifiMapRealtime();
@@ -997,7 +824,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
   setInterval(() => {
     if (isEditing) return;
-    loadAreaMapTable();
     loadUserTable();
     loadEntryManagement();
     loadApNodesTable();
@@ -1327,21 +1153,38 @@ function renderTunnelMap(data) {
 }
 
 
-// ======== AP位置設定 ========
+// ======== AP位置設定（現場の Wi-Fi AP） ========
+// MAC と入口からの距離を入れるだけ。番号はサーバーが自動で振る（app.py の handle_ap_positions）。
+// 既設の 6 台は番号 0〜5（表示名 AP1, AP3, …, AP11）で、距離の列が空なら 0〜500m（100m 間隔）とみなす。
 const AP_LABELS = ['1', '3', '4', '5', '6', '11'];
-// 入口からの距離[m]。app.py の AP_DISTANCES_M と同じ値にする（プルダウンの表示用）
+// 入口からの距離[m]。app.py の AP_DISTANCES_M と同じ値にする（距離が未設定の既設 AP の初期値）
 const AP_POSITION_DISTANCES_M = [0, 100, 200, 300, 400, 500];
 
-function apPositionOptions(selectedPos) {
-  return AP_LABELS.map((label, i) =>
-    `<option value="${i}" ${i === selectedPos ? 'selected' : ''}>AP${label}（${AP_POSITION_DISTANCES_M[i]}m）</option>`
-  ).join('');
+function apPositionRowHtml(item) {
+  const distance = item.distance_m === null || item.distance_m === undefined ? '' : item.distance_m;
+  const label = item.label || (item.position !== undefined && item.position !== null ? `AP#${item.position + 1}` : '（自動）');
+  return `
+    <td class="ap-position-label">${escapeHtml(label)}</td>
+    <td><input class="input ap-position-mac" type="text" value="${escapeHtml(item.mac || '')}" placeholder="AA:BB:CC:DD:EE:FF"></td>
+    <td><input class="input ap-position-distance" type="number" min="0" step="1" value="${escapeHtml(distance)}" placeholder="m"></td>
+    <td><button class="button is-danger is-small" onclick="removeApPositionRow(this)">削除</button></td>
+  `;
+}
+
+function fillApPositionRows(list, keepOriginal) {
+  const body = document.getElementById('apPositionsTableBody');
+  if (!body) return;
+  body.innerHTML = '';
+  list.forEach(item => {
+    const row = document.createElement('tr');
+    if (keepOriginal) row.dataset.originalMac = item.mac || '';
+    if (item.position !== undefined && item.position !== null) row.dataset.position = item.position;
+    row.innerHTML = apPositionRowHtml(item);
+    body.appendChild(row);
+  });
 }
 
 async function loadApPositionsTable() {
-  const body = document.getElementById('apPositionsTableBody');
-  if (!body) return;
-
   try {
     const res = await fetch('/api/ap_positions');
     const data = await res.json();
@@ -1349,18 +1192,7 @@ async function loadApPositionsTable() {
       console.error('ap_positions GET error:', data);
       return;
     }
-    const list = Array.isArray(data) ? data : [];
-    body.innerHTML = '';
-    list.forEach(item => {
-      const row = document.createElement('tr');
-      row.dataset.originalMac = item.mac || '';
-      row.innerHTML = `
-        <td><input class="input" type="text" value="${escapeHtml(item.mac)}"></td>
-        <td><select class="select ap-position-select">${apPositionOptions(item.position)}</select></td>
-        <td><button class="button is-danger" onclick="removeApPositionRow(this)">削除</button></td>
-      `;
-      body.appendChild(row);
-    });
+    fillApPositionRows(Array.isArray(data) ? data : [], true);
   } catch (e) {
     console.error('loadApPositionsTable error:', e);
   }
@@ -1369,59 +1201,66 @@ async function loadApPositionsTable() {
 function addApPositionRow() {
   const body = document.getElementById('apPositionsTableBody');
   const row = document.createElement('tr');
-  row.innerHTML = `
-    <td><input class="input" type="text" placeholder="AA:BB:CC:DD:EE:FF"></td>
-    <td><select class="select ap-position-select">${apPositionOptions(0)}</select></td>
-    <td><button class="button is-danger" onclick="removeApPositionRow(this)">削除</button></td>
-  `;
+  row.innerHTML = apPositionRowHtml({});
   body.appendChild(row);
+  row.querySelector('.ap-position-mac').focus();
+}
+
+function readApPositionRows() {
+  return Array.from(document.querySelectorAll('#apPositionsTableBody tr')).map(row => ({
+    row,
+    mac: row.querySelector('.ap-position-mac')?.value.trim() || '',
+    distanceText: row.querySelector('.ap-position-distance')?.value.trim() || '',
+    position: row.dataset.position !== undefined ? parseInt(row.dataset.position) : null,
+    originalMac: row.dataset.originalMac || '',
+  }));
 }
 
 async function saveApPositionsTable() {
-  const rows = document.querySelectorAll('#apPositionsTableBody tr');
   const errors = [];
-
-  for (const row of rows) {
-    const macInput = row.querySelector('input');
-    const posSelect = row.querySelector('select.ap-position-select');
-    const mac = macInput ? macInput.value.trim() : '';
-    const pos = posSelect ? parseInt(posSelect.value) : NaN;
-    if (!mac || isNaN(pos)) continue;
-
+  for (const r of readApPositionRows()) {
+    if (!r.mac && !r.distanceText) continue;   // 空の行は無視
+    if (!r.mac || r.distanceText === '' || isNaN(Number(r.distanceText))) {
+      errors.push(`${r.mac || '（MAC 未入力）'} → MAC と距離（m）の両方を入れてください`);
+      continue;
+    }
+    const payload = { mac: r.mac, distance_m: Number(r.distanceText) };
+    if (r.position !== null && !isNaN(r.position)) payload.position = r.position;
+    if (r.originalMac && r.originalMac !== r.mac) payload.original_mac = r.originalMac;
     const res = await fetch('/api/ap_positions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mac, position: pos })
+      body: JSON.stringify(payload)
     });
-    if (!res.ok) {
-      const b = await res.json().catch(() => ({}));
-      errors.push(`${mac} → ${b.error || `HTTP ${res.status}`}`);
-      console.error('ap_positions save error', mac, b);
-    }
+    const b = await res.json().catch(() => ({}));
+    if (!res.ok) errors.push(`${r.mac} → ${b.error || `HTTP ${res.status}`}`);
+    else if (b.warning) errors.push(b.warning);
   }
-
-  if (errors.length > 0) {
-    alert('保存に失敗しました:\n' + errors.join('\n'));
-  } else {
-    alert('AP位置設定を保存しました');
-  }
+  isEditing = false;
+  alert(errors.length ? '保存できなかった項目があります:\n' + errors.join('\n') : 'AP位置設定を保存しました');
   loadApPositionsTable();
+  loadTunnelMap();
 }
 
 function removeApPositionRow(button) {
   const row = button.closest('tr');
-  const mac = row.dataset.originalMac || row.querySelector('input')?.value;
+  const mac = row.dataset.originalMac;
   if (!mac) {
     row.remove();
     return;
   }
+  if (!confirm(`AP ${mac} を AP位置設定から削除しますか？`)) return;
   fetch('/api/ap_positions', {
     method: 'DELETE',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ mac })
   }).then(res => {
-    if (res.ok) row.remove();
-    else alert('削除失敗');
+    if (res.ok) {
+      row.remove();
+      loadTunnelMap();
+    } else {
+      alert('削除に失敗しました');
+    }
   });
 }
 
@@ -1469,19 +1308,17 @@ async function loadApPreset() {
       alert('プリセットが見つかりません');
       return;
     }
-
-    const body = document.getElementById('apPositionsTableBody');
-    body.innerHTML = '';
-    (preset.positions || []).forEach(item => {
-      const row = document.createElement('tr');
-      row.dataset.originalMac = item.mac || '';
-      row.innerHTML = `
-        <td><input class="input" type="text" value="${escapeHtml(item.mac)}"></td>
-        <td><select class="select ap-position-select">${apPositionOptions(item.position)}</select></td>
-        <td><button class="button is-danger" onclick="removeApPositionRow(this)">削除</button></td>
-      `;
-      body.appendChild(row);
+    // 古いプリセットは位置番号だけを持つので、その番号の距離を入れる
+    const list = (preset.positions || []).map(item => {
+      const pos = item.position === undefined || item.position === null ? null : parseInt(item.position);
+      let d = item.distance_m;
+      if ((d === undefined || d === null) && pos !== null && pos >= 0 && pos < AP_POSITION_DISTANCES_M.length) {
+        d = AP_POSITION_DISTANCES_M[pos];
+      }
+      const label = pos === null ? '（自動）' : (pos < AP_LABELS.length ? `AP${AP_LABELS[pos]}` : `AP#${pos + 1}`);
+      return { mac: item.mac, position: pos, distance_m: d, label };
     });
+    fillApPositionRows(list, false);
 
     const nameInput = document.getElementById('apPresetNameInput');
     if (nameInput) nameInput.value = name;
@@ -1501,19 +1338,16 @@ async function saveApPreset() {
     return;
   }
 
-  const rows = document.querySelectorAll('#apPositionsTableBody tr');
   const positions = [];
-  for (const row of rows) {
-    const macInput = row.querySelector('input');
-    const posSelect = row.querySelector('select.ap-position-select');
-    const mac = macInput ? macInput.value.trim() : '';
-    const pos = posSelect ? parseInt(posSelect.value) : NaN;
-    if (!mac || isNaN(pos)) continue;
-    positions.push({ mac, position: pos });
+  for (const r of readApPositionRows()) {
+    if (!r.mac || r.distanceText === '' || isNaN(Number(r.distanceText))) continue;
+    const item = { mac: r.mac, distance_m: Number(r.distanceText) };
+    if (r.position !== null && !isNaN(r.position)) item.position = r.position;
+    positions.push(item);
   }
 
   if (positions.length === 0) {
-    alert('保存するAP設定がありません');
+    alert('保存するAP設定がありません（MAC と距離を入れた行が必要です）');
     return;
   }
 
@@ -1593,7 +1427,7 @@ async function loadApNodesTable() {
 
   body.innerHTML = '';
   if (nodes.length === 0) {
-    body.innerHTML = '<tr><td colspan="7" style="text-align:center;color:grey;">まだ登録された ESP32 AP はありません（firmware/esp32s3_ap を書き込んで電源を入れると表示されます）</td></tr>';
+    body.innerHTML = '<tr><td colspan="7" style="text-align:center;color:grey;">まだ登録された ESP32 はありません（電源を入れると自動で出ます。下の欄から手で追加もできます）</td></tr>';
     return;
   }
 
@@ -1603,8 +1437,10 @@ async function loadApNodesTable() {
     const online = !!n.online;
     const enabled = n.enabled !== false;
     const distance = n.distance_m === null || n.distance_m === undefined ? '' : n.distance_m;
+    const manual = !n.last_seen;   // 画面から追加して、まだ heartbeat が来ていない
+    const kind = String(n.fw || '').startsWith('ble-') ? 'BLE' : 'Wi-Fi';
     row.innerHTML = `
-      <td><span class="entry-badge ${online ? 'entry-in' : 'entry-out'}">${online ? '稼働中' : '停止'}</span></td>
+      <td><span class="entry-badge ${online ? 'entry-in' : 'entry-out'}">${online ? '稼働中' : (manual ? '手動登録' : '停止')}</span> <small>${kind}</small></td>
       <td><input class="input ap-node-label" type="text" value="${escapeHtml(n.label || '')}" placeholder="A050"></td>
       <td class="mono-cell">${escapeHtml(n.mac)}</td>
       <td><input class="input ap-node-distance" type="number" min="0" step="1" value="${escapeHtml(distance)}" placeholder="未設定"></td>
@@ -1614,7 +1450,7 @@ async function loadApNodesTable() {
           <option value="0" ${enabled ? '' : 'selected'}>使わない</option>
         </select>
       </td>
-      <td>${formatEntryTime(n.last_seen)}</td>
+      <td>${n.last_seen ? formatEntryTime(n.last_seen) : '—'}</td>
       <td class="ap-node-actions">
         <button class="button is-success is-small" onclick="saveApNode(this)">保存</button>
         <button class="button is-danger is-small" onclick="deleteApNode(this)">削除</button>
@@ -1652,6 +1488,45 @@ async function saveApNode(button) {
   } finally {
     isEditing = false;
   }
+  lastApNodesSig = null;
+  loadApNodesTable();
+  loadTunnelMap();
+}
+
+// 表の下の追加欄から ESP32 を登録する（上り回線が無く heartbeat を送れない ESP32 など）
+async function addApNode() {
+  const get = id => document.getElementById(id);
+  const mac = get('apNodeNewMac').value.trim();
+  const label = get('apNodeNewLabel').value.trim();
+  const distanceText = get('apNodeNewDistance').value.trim();
+  const kind = get('apNodeNewKind').value;
+  if (!/^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$/.test(mac)) {
+    alert('MAC アドレスは AA:BB:CC:DD:EE:FF の形で入れてください（BLE はシリアルに出る address=…）');
+    return;
+  }
+  if (distanceText !== '' && isNaN(Number(distanceText))) {
+    alert('入口からの距離は数値（m）で入れてください');
+    return;
+  }
+  try {
+    const res = await fetch('/api/ap_nodes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ create: true, mac, label, kind, distance_m: distanceText === '' ? null : Number(distanceText) })
+    });
+    if (!res.ok) {
+      const b = await res.json().catch(() => ({}));
+      alert('追加できませんでした: ' + (b.error || res.status));
+      return;
+    }
+  } catch (e) {
+    console.error('addApNode error:', e);
+    alert('追加できませんでした');
+    return;
+  } finally {
+    isEditing = false;
+  }
+  ['apNodeNewMac', 'apNodeNewLabel', 'apNodeNewDistance'].forEach(id => { get(id).value = ''; });
   lastApNodesSig = null;
   loadApNodesTable();
   loadTunnelMap();

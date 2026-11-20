@@ -66,11 +66,13 @@ ESP32-S3 ビーコン（BLE）──heartbeat──> /api/ap_heartbeat ──> S
 | 個別指示（待て・奥へ…）の選択肢 | `admin.js` の `DEVICE_INSTRUCTION_LABELS` と `app.py` の `DEVICE_INSTRUCTIONS`（両方。値の追加はウォッチと要相談） |
 | 火災位置の指定・解除・炎の絵 | `admin.js` の `toggleFireMode` / `placeFireLocation` / `clearFireLocation` / `drawFireMarker` / `updateFireStatus` |
 | 入退場の表 | `admin.js` の `loadEntryManagement` / `renderEntryCurrentTable` / `renderEntryLogTable` |
-| AP位置設定・プリセット | `admin.js` の `loadApPositionsTable` / `saveApPositionsTable` / `loadApPreset` / `saveApPreset`。選択肢は `AP_LABELS` / `AP_POSITION_DISTANCES_M` |
+| AP位置設定（現場の Wi-Fi AP）・プリセット | `admin.js` の `loadApPositionsTable` / `addApPositionRow` / `saveApPositionsTable` / `apPositionRowHtml` / `loadApPreset` / `saveApPreset`。サーバーは `app.py` の `handle_ap_positions`（番号の自動の振り方）/ `load_ap_position_rows`（距離の決め方）/ `ap_position_label` |
+| ESP32 を画面から追加 | `admin.js` の `addApNode`（入力欄は `index.html` の `.ap-node-add`）、サーバーは `handle_ap_nodes` の `create` |
+| 各欄の「使い方」の文 | `index.html` の各欄の `<details class="card-help">`（見た目は `style.css` の `.card-help`）。機能を変えたら説明も直す |
 | ESP32 AP の表 | `admin.js` の `loadApNodesTable` / `saveApNode` / `deleteApNode` |
 | 位置推定の方式の切り替え・比較の表 | `admin.js` の `loadPositionSettings` / `savePositionMethod` / `loadPositionEval` / `clearPositionEval`、ポップアップの `positionMethodsHtml` / `recordPositionEval` |
 | カメラの映像・設定の表 | `admin.js` の `loadCameras` / `startCameraView` / `fetchCameraFrame` / `saveCamera`。取得間隔・自動停止は `CAMERA_FRAME_INTERVAL_MS` / `CAMERA_AUTO_STOP_MS` |
-| ユーザー・エリア割当の表 | `admin.js` の `loadUserTable` / `saveUserTable`、`loadAreaMapTable` / `saveAreaMapTable` |
+| ユーザーの表 | `admin.js` の `loadUserTable` / `saveUserTable`（エリア割当設定の表は 2026-11-21 に削除。割当は DB と `/api/area` に残る） |
 | 色・文字サイズ・余白 | `style.css` 末尾の「見やすさ調整」ブロック。状態色は `--state-*` |
 | ログイン画面 | `login.html`（送信は `POST /` に `{email, password, mode}`） |
 
@@ -80,7 +82,7 @@ ESP32-S3 ビーコン（BLE）──heartbeat──> /api/ap_heartbeat ──> S
 |---|---|
 | 位置推定の計算を変える | `estimate_positions`（全体の流れ）、`estimate_methods`（①〜⑥）、`scan_top2_m` / `scan_rssi_m` / `scan_wifi3_m` / `scan_fusion_m`（1回分の距離、`MAC01_WEIGHT` / `PATH_LOSS_N` / `WIFI3_*`）、`smooth_distance_m`（今までの平滑化）、`series_distance_m`（カルマン、`SERIES_*`）、Wi-Fi と BLE の比重 `SOURCE_WEIGHT` / `SOURCE_SIGMA_SPACINGS`、定数 `SMOOTHING_*` / `OUTLIER_SPACINGS` |
 | 位置推定の方式を足す・名前を変える | `app.py` の `POSITION_METHODS`（1回分の求め方は `SCAN_ESTIMATORS`、basic / series の組み合わせは `SCAN_ESTIMATOR_MODES`）、`admin.js` の `POSITION_METHOD_SHORT`、`position_eval` の列（`supabase/scan_reports.sql`、追加分は `ALTER TABLE`） |
-| AP の距離・台数を変える | 既設6台: `AP_LABELS` / `AP_DISTANCES_M`（`admin.js` の同名定数も）。ESP32 AP: 画面の「ESP32 AP」表で設定（コード変更不要） |
+| AP の距離・台数を変える | 画面で設定（コード変更不要）: 現場の Wi-Fi AP は「AP位置設定」（MAC と距離）、ESP32 は「ESP32 AP」表。`AP_LABELS` / `AP_DISTANCES_M`（`admin.js` の同名定数も）は、距離が未設定の既設6台の初期値と名前 |
 | AP の距離の出どころ・トンネルの両端・間隔 | `class ApMap` と `load_ap_map` |
 | エリアの決め方 | `build_area_layout` / `area_for_ratio` / `area_centers_m`、`estimate_positions` 内の優先順位 |
 | 火災の方向・距離・文言（ウォッチに出る文） | `fire_relation`（文言）、`build_fire_alerts`、定数 `FIRE_NEAR_SPACINGS` / `FIRE_DISTANCE_STEP_M` |

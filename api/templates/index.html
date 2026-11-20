@@ -44,6 +44,19 @@
           </div>
         </div>
         <button class="button is-danger is-small is-outlined" onclick="clearPositionEval()">記録をすべて削除</button>
+        <details class="card-help">
+          <summary>使い方</summary>
+          <div class="card-help-body">
+            <p>マップ・区間の指示・火災の通知に使う、位置の計算方法を選びます。①〜⑥ はいつも同時に計算しています。</p>
+            <ul>
+              <li><b>①</b> 強い AP 2つを 8:2 で配分（今までの方法）　<b>②</b> ① を時系列でなめらかに</li>
+              <li><b>③</b> 強い 2つの電波の差で間のどこかを出す　<b>④</b> ③ を時系列で（Wi-Fi＋BLE で一番良い候補）</li>
+              <li><b>⑤</b> Wi-Fi だけ、3つ目の AP まで使う　<b>⑥</b> Wi-Fi と BLE をそれぞれ向いた計算で合わせる</li>
+            </ul>
+            <p><b>選び方:</b> 決まった地点（0m・50m…）に立ち、マップの作業者アイコン →「推定の比較」→「正しい位置」に今の位置を入れて「記録」。この表に方式ごとの誤差がたまるので、いちばん小さい方式を選んで「この方式を使う」。</p>
+            <p>ウォッチが RSSI（電波の強さの数値）を送るまでは、①〜⑥ はほぼ同じ値になります。</p>
+          </div>
+        </details>
       </div>
       <div class="table-container position-eval-scroll">
         <table class="table is-fullwidth is-narrow">
@@ -51,7 +64,6 @@
           <tbody id="positionEvalBody"></tbody>
         </table>
       </div>
-      <p class="section-hint">マップ・区間の指示・火災の通知に使う計算方法です。全方式を同時に計算しているので、作業者アイコンの「推定の比較」で全部の値が見られます。決まった地点で「正しい位置」を入れて「記録」すると、この表に方式ごとの誤差がたまります。</p>
     </section>
 
     <section class="box">
@@ -62,6 +74,18 @@
           <button type="button" class="button is-small" id="fireClearBtn" onclick="clearFireLocation()" disabled>火災位置を解除</button>
           <span id="fireStatus" class="fire-status">火災位置: 未設定</span>
         </div>
+        <details class="card-help">
+          <summary>使い方</summary>
+          <div class="card-help-body">
+            <ul>
+              <li><b>作業者に指示:</b> 丸いアイコンを押す →「待て・奥へ・手前へ・なし」。その人のウォッチだけに届きます</li>
+              <li><b>区間にまとめて指示:</b> 点線で区切った AP の区間（0〜100m など）を押す → 指示を選ぶ。今その区間にいる全員と、あとから区間に入った人に届きます。「なし」の区間に入っても、出ている指示は消えません</li>
+              <li><b>火災位置:</b>「火災位置を指定」→ マップの火災の場所を押す → 確認。各ウォッチに「自分から見てどちらに何 m」が届きます。解除は「火災位置を解除」</li>
+              <li><b>推定の比較:</b> アイコンのポップアップを開くと、①〜⑥ の推定位置が見られます</li>
+              <li>色: 緑=作業者、赤く光る=通報中、薄い=オフライン（最後の位置）、点線の丸=エリアだけ判明。下の青い丸は AP、灰色＋× は止まっている ESP32</li>
+            </ul>
+          </div>
+        </details>
       </div>
       <div class="tunnel-map-wrap">
         <canvas id="tunnelMap"></canvas>
@@ -77,12 +101,23 @@
         <li><span class="legend-fire"></span>火災位置</li>
         <li><span class="legend-ap-off"></span>停止中の ESP32 AP</li>
       </ul>
-      <p class="section-hint">作業者アイコンを押すとその人だけに、点線で区切った AP の区間を押すとその区間にいる全員に指示を出せます（あとから区間に入った人にも届きます）。</p>
     </section>
 
     <section class="box">
-      <h2 class="subtitle">カメラ</h2>
-      <p class="section-hint">「映像を見る」を押すと、カメラが約 1 秒ごとに撮った画像を表示します（コマ送り）。見始めてから映るまで最大 10 秒ほどかかります。見ていない間はカメラは送信しません。10 分たつと自動で止まります。</p>
+      <div class="box-head">
+        <h2 class="subtitle">カメラ</h2>
+        <details class="card-help">
+          <summary>使い方</summary>
+          <div class="card-help-body">
+            <ul>
+              <li>「映像を見る」を押すと、カメラが約 1 秒ごとに撮った画像が出ます（コマ送り）。映るまで最大 10 秒ほどかかります</li>
+              <li>見ていない間、カメラは画像を送りません。10 分たつと自動で止まります（もう一度押せば続きが見られます）</li>
+              <li>「カメラの設定」で名前・入口からの距離・受け取る/受け取らないを変えられます。BLE を兼ねるカメラの距離は「ESP32 AP」表の距離と同じ値になります</li>
+              <li>カメラを増やすときは firmware/esp32cam_uplink/README.md の「カメラごとの設定ファイル」</li>
+            </ul>
+          </div>
+        </details>
+      </div>
       <div id="cameraGrid" class="camera-grid"></div>
       <details class="camera-settings">
         <summary>カメラの設定</summary>
@@ -105,7 +140,19 @@
     </section>
 
     <section class="box">
-      <h2 class="subtitle">入場管理</h2>
+      <div class="box-head">
+        <h2 class="subtitle">入場管理</h2>
+        <details class="card-help">
+          <summary>使い方</summary>
+          <div class="card-help-body">
+            <ul>
+              <li>ウォッチが登録済みの AP（AP位置設定・ESP32 AP）の電波を拾うと「入場中」、どれも拾えなくなると「退場」になります</li>
+              <li>左が今の状態（入場中が上）、右が直近 30 件の入場・退場の記録です。5 秒ごとに更新されます</li>
+              <li>名前は「ユーザー設定」でウォッチの装置 ID と結び付けたものが出ます</li>
+            </ul>
+          </div>
+        </details>
+      </div>
       <div class="entry-status-grid">
         <div>
           <p class="entry-section-label">現在の入場状況</p>
@@ -145,8 +192,20 @@
     <div class="settings-container">
 
       <section class="box column-box">
-        <h2 class="subtitle">AP位置設定</h2>
-        <p class="section-hint">APのMACアドレスと設置場所を対応付けてください（AP1=入口0m 〜 AP11=奥500m、100m間隔）。</p>
+        <div class="box-head">
+          <h2 class="subtitle">AP位置設定（現場の Wi-Fi AP）</h2>
+          <details class="card-help">
+            <summary>使い方</summary>
+            <div class="card-help-body">
+              <ul>
+                <li><b>AP を足す:</b>「新規追加」→ MAC アドレス（AA:BB:CC:DD:EE:FF）と入口からの距離 [m] を入れる →「保存」。番号は自動で振られます</li>
+                <li><b>直す:</b> MAC や距離を書き換えて「保存」。<b>消す:</b> 行の「削除」</li>
+                <li><b>プリセット:</b> 今の表を名前を付けて保存しておき、別の現場では「読み込み」→「保存」で切り替えられます</li>
+                <li>ESP32 で作ったビーコン・AP は、下の「ESP32 AP」表で設定します</li>
+              </ul>
+            </div>
+          </details>
+        </div>
 
         <div class="field has-addons">
           <div class="control is-expanded">
@@ -176,8 +235,9 @@
           <table class="table is-fullwidth">
             <thead>
               <tr>
+                <th>番号</th>
                 <th>MACアドレス</th>
-                <th>位置番号</th>
+                <th>入口からの距離 [m]</th>
                 <th>操作</th>
               </tr>
             </thead>
@@ -191,27 +251,18 @@
       </section>
 
       <section class="box column-box">
-        <h2 class="subtitle">エリア割当設定</h2>
-        <div class="table-container">
-          <table class="table is-fullwidth">
-            <thead>
-              <tr>
-                <th>エリアID</th>
-                <th>MACアドレス</th>
-                <th>操作</th>
-              </tr>
-            </thead>
-            <tbody id="areaTableBody"></tbody>
-          </table>
+        <div class="box-head">
+          <h2 class="subtitle">ユーザー設定</h2>
+          <details class="card-help">
+            <summary>使い方</summary>
+            <div class="card-help-body">
+              <ul>
+                <li>ウォッチの装置 ID と、画面に出す名前を結び付けます。「新規追加」→ 名前と装置 ID を入れて「保存」</li>
+                <li>結び付けていないウォッチは、マップや入場管理に装置 ID のまま出ます</li>
+              </ul>
+            </div>
+          </details>
         </div>
-        <div class="buttons mt-2">
-          <button class="button is-primary" onclick="addAreaRow()">新規追加</button>
-          <button class="button is-success" onclick="saveAreaMapTable()">保存</button>
-        </div>
-      </section>
-
-      <section class="box column-box">
-        <h2 class="subtitle">ユーザー設定</h2>
         <div class="table-container">
           <table class="table is-fullwidth">
             <thead>
@@ -232,13 +283,21 @@
 
     </div>
 
-
-
-
     <section class="box ap-nodes-box is-bottom">
       <div class="box-head">
         <h2 class="subtitle">ESP32 AP</h2>
-        <span class="section-hint">電源を入れると自動で登録されます。入口からの距離を入れて「保存」すると位置推定に使われます。</span>
+        <details class="card-help">
+          <summary>使い方</summary>
+          <div class="card-help-body">
+            <ul>
+              <li>ESP32（ビーコン・カメラ）は、電源を入れてインターネットにつながると自動でこの表に出ます</li>
+              <li><b>入口からの距離 [m]</b> を入れて「保存」すると位置推定に使われます。距離が空の行は使われません</li>
+              <li><b>手で追加:</b> 表の下の欄に MAC（BLE はシリアルに出る address=…）・表示名・距離・種類を入れて「追加」。インターネットにつながらない ESP32 用です。あとから本物が通信すると、その行に引き継がれます</li>
+              <li>「使わない」にすると位置推定から外れます。「削除」しても、動いている ESP32 は次の通信でまた出てきます</li>
+              <li>状態: 稼働中（90 秒以内に通信あり）/ 停止 / 手動登録（まだ通信が来ていない）</li>
+            </ul>
+          </div>
+        </details>
       </div>
       <div class="table-container ap-nodes-scroll">
         <table class="table is-fullwidth is-narrow">
@@ -246,7 +305,7 @@
             <tr>
               <th>状態</th>
               <th>表示名</th>
-              <th>BSSID</th>
+              <th>MAC（BSSID / BLE）</th>
               <th>入口からの距離 [m]</th>
               <th>位置推定</th>
               <th>最終通信</th>
@@ -255,6 +314,19 @@
           </thead>
           <tbody id="apNodesTableBody"></tbody>
         </table>
+      </div>
+      <div class="ap-node-add">
+        <span class="ap-node-add-label">手で追加</span>
+        <input class="input is-small" id="apNodeNewMac" type="text" placeholder="MAC（AA:BB:CC:DD:EE:FF）">
+        <input class="input is-small" id="apNodeNewLabel" type="text" placeholder="表示名（例 A050）">
+        <input class="input is-small" id="apNodeNewDistance" type="number" min="0" step="1" placeholder="距離 m">
+        <div class="select is-small">
+          <select id="apNodeNewKind">
+            <option value="ble">BLE ビーコン</option>
+            <option value="wifi">Wi-Fi AP</option>
+          </select>
+        </div>
+        <button class="button is-primary is-small" onclick="addApNode()">追加</button>
       </div>
     </section>
 

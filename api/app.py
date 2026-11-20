@@ -87,6 +87,34 @@ def load_ap_positions():
         return {}
 
 
+def load_ap_position_rows():
+    """AP位置設定（現場の Wi-Fi AP）の行。各行に distance_m（入口からの距離）と label を入れて返す。
+    distance_m 列（supabase/ap_positions_distance.sql）が空・無い行は、位置番号 0〜5 なら AP_DISTANCES_M の値。
+    位置番号 6 以降で距離が無い行は distance_m=None（位置推定に使わない）"""
+    try:
+        rows = supabase.table(TABLE_AP_POSITIONS).select("*").execute().data or []
+    except Exception as e:
+        print(f"Error loading ap_positions: {e}")
+        return []
+    out = []
+    for row in rows:
+        try:
+            pos = int(row.get('position'))
+        except (TypeError, ValueError):
+            continue
+        d = row.get('distance_m')
+        if not isinstance(d, (int, float)):
+            d = AP_DISTANCES_M[pos] if 0 <= pos < AP_COUNT else None
+        out.append(dict(row, position=pos, distance_m=(float(d) if d is not None else None),
+                        label=ap_position_label(pos)))
+    return sorted(out, key=lambda r: r['position'])
+
+
+def ap_position_label(pos):
+    """位置番号 → 表示名。0〜5 は既設の AP の名前（AP1, AP3, …, AP11）、6 以降は「AP#7」のように番号＋1"""
+    return f"AP{AP_LABELS[pos]}" if 0 <= pos < AP_COUNT else f"AP#{pos + 1}"
+
+
 def load_user_table():
     try:
         response = supabase.table(TABLE_USER).select("*").execute()
@@ -310,17 +338,14 @@ def load_ap_nodes():
 
 
 def load_ap_map():
-    """AP位置設定（ap_positions, 位置番号）と ESP32 AP（ap_nodes, 距離を直接持つ）を合わせた ApMap。
-    同じ MAC が両方にあれば ESP32 AP の設定を優先する。距離未設定・無効の ESP32 AP は位置推定に使わない。"""
+    """AP位置設定（ap_positions、現場の Wi-Fi AP。距離は distance_m か位置番号から）と
+    ESP32 AP（ap_nodes, 距離を直接持つ）を合わせた ApMap。
+    同じ MAC が両方にあれば ESP32 AP の設定を優先する。距離未設定・無効の AP は位置推定に使わない。"""
     entries = {}
-    for mac, pos in load_ap_positions().items():
-        try:
-            pos = int(pos)
-        except (TypeError, ValueError):
-            continue
-        if mac and 0 <= pos < AP_COUNT:
-            entries[mac] = {'distance_m': AP_DISTANCES_M[pos], 'label': f"AP{AP_LABELS[pos]}",
-                            'source': 'manual', 'online': None}
+    for row in load_ap_position_rows():
+        if row.get('mac') and row.get('distance_m') is not None:
+            entries[row['mac']] = {'distance_m': row['distance_m'], 'label': row['label'],
+                                   'source': 'manual', 'online': None}
     for node in load_ap_nodes():
         mac = node.get('mac')
         if not mac or node.get('enabled') is False or node.get('distance_m') is None:
@@ -1063,33 +1088,62 @@ def delete_area():
 @app.route('/api/ap_positions', methods=['GET', 'POST', 'DELETE'])
 @login_required
 def handle_ap_positions():
+    """AP位置設定（現場の Wi-Fi AP）。GET は位置番号順に、距離（distance_m）と表示名（label）付き。
+    POST {mac, distance_m, position?, original_mac?}: position を省くと自動で振る（今の最大＋1、6 以上）。
+      original_mac は表で MAC を書き換えたときの元の MAC（元の行を消して付け替える）。
+    DELETE {mac}"""
     if request.method == 'GET':
-        try:
-            response = supabase.table(TABLE_AP_POSITIONS).select("*").execute()
-            data = sorted(response.data or [], key=lambda r: r.get("position", 0))
-            return jsonify(data)
-        except Exception as e:
-            print(f"[ap_positions GET] {type(e).__name__}: {e}")
-            return jsonify({'error': str(e)}), 500
-    elif request.method == 'POST':
-        data = request.json
-        if 'mac' not in data or 'position' not in data:
-            return jsonify({'error': 'mac と position が必要です'}), 400
-        try:
-            supabase.table(TABLE_AP_POSITIONS).upsert(data).execute()
-            return jsonify({'message': 'AP position saved'})
-        except Exception as e:
-            return jsonify({'error': str(e)}), 500
-    else:
-        data = request.json or {}
-        mac = data.get('mac')
+        return jsonify(load_ap_position_rows())
+
+    data = request.json or {}
+    mac = str(data.get('mac') or '').strip().upper()
+    if request.method == 'DELETE':
         if not mac:
             return jsonify({'error': 'mac を指定してください'}), 400
         try:
-            supabase.table(TABLE_AP_POSITIONS).delete().eq('mac', mac).execute()
+            rows = supabase.table(TABLE_AP_POSITIONS).select("mac").execute().data or []
+            for r in rows:   # 大文字・小文字の違う同じ MAC もまとめて消す
+                if norm_mac(r.get('mac')) == mac:
+                    supabase.table(TABLE_AP_POSITIONS).delete().eq('mac', r['mac']).execute()
             return jsonify({'message': 'deleted'})
         except Exception as e:
             return jsonify({'error': str(e)}), 500
+
+    if not _MAC_RE.match(mac):
+        return jsonify({'error': 'MAC アドレスは AA:BB:CC:DD:EE:FF の形で入れてください'}), 400
+    try:
+        distance = float(data.get('distance_m'))
+    except (TypeError, ValueError):
+        return jsonify({'error': '入口からの距離（m）を数値で入れてください'}), 400
+    if distance < 0:
+        return jsonify({'error': '距離は 0 以上にしてください'}), 400
+    try:
+        rows = supabase.table(TABLE_AP_POSITIONS).select("*").execute().data or []
+        original = norm_mac(data.get('original_mac')) or mac
+        same = [r for r in rows if norm_mac(r.get('mac')) in (mac, original)]
+        position = data.get('position')
+        if position is None and same:
+            position = same[0].get('position')            # 既にある AP は番号をそのまま
+        if position is None:
+            used = [int(r['position']) for r in rows if str(r.get('position', '')).lstrip('-').isdigit()]
+            # 新しい AP は自動で次の番号。既設の 6 台の番号 0〜5（AP1〜AP11 の名前）とは重ねない
+            position = max([AP_COUNT - 1] + used) + 1
+        position = int(position)
+        for r in same:                                     # MAC を書き換えた・大文字小文字の違う行は消して付け替える
+            if r.get('mac') != mac:
+                supabase.table(TABLE_AP_POSITIONS).delete().eq('mac', r['mac']).execute()
+        row = {'mac': mac, 'position': position, 'distance_m': distance}
+        try:
+            supabase.table(TABLE_AP_POSITIONS).upsert(row).execute()
+        except Exception as e:
+            print(f"ap_positions upsert retry without distance_m: {e}")
+            row.pop('distance_m')
+            supabase.table(TABLE_AP_POSITIONS).upsert(row).execute()
+            return jsonify({'message': 'saved', 'position': position,
+                            'warning': '距離の列がありません。supabase/ap_positions_distance.sql を実行してください（今は位置番号の距離を使います）'})
+        return jsonify({'message': 'saved', 'position': position, 'label': ap_position_label(position)})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 
 @app.route('/api/ap_presets', methods=['GET', 'POST', 'DELETE'])
@@ -1108,8 +1162,8 @@ def handle_ap_presets():
         if not isinstance(positions, list) or not positions:
             return jsonify({'error': 'positions（AP設定の配列）が必要です'}), 400
         for item in positions:
-            if 'mac' not in item or 'position' not in item:
-                return jsonify({'error': '各要素に mac と position が必要です'}), 400
+            if 'mac' not in item or ('position' not in item and 'distance_m' not in item):
+                return jsonify({'error': '各要素に mac と distance_m（または position）が必要です'}), 400
         try:
             supabase.table(TABLE_AP_PRESETS).upsert({
                 'name': name,
@@ -1187,7 +1241,9 @@ def ap_heartbeat():
 @login_required
 def handle_ap_nodes():
     """ESP32 AP の一覧と設定。GET は online（heartbeat が AP_NODE_ONLINE_SEC 以内）付き。
-    POST {mac, label?, distance_m?, enabled?} で設定を変更、DELETE {mac} で削除（動いていれば次の heartbeat で再登録される）"""
+    POST {mac, label?, distance_m?, enabled?} で設定を変更、DELETE {mac} で削除（動いていれば次の heartbeat で再登録される）。
+    POST {create: true, mac, label, distance_m, kind: 'ble'|'wifi'} で画面から追加（上り回線の無い ESP32 など）。
+    追加した行の fw は 'ble-manual' / 'wifi-manual'。実物の heartbeat が届くと fw などは実物の値になる"""
     if request.method == 'GET':
         nodes = sorted(load_ap_nodes(), key=lambda n: (n.get('distance_m') is None, n.get('distance_m') or 0, n.get('mac')))
         for n in nodes:
@@ -1206,6 +1262,28 @@ def handle_ap_nodes():
         except Exception as e:
             print(f"Error deleting ap node {mac}: {e}")
             return jsonify({'error': '削除に失敗しました'}), 500
+
+    if data.get('create'):
+        try:
+            d = data.get('distance_m')
+            distance = None if d in (None, '') else float(d)
+        except (TypeError, ValueError):
+            return jsonify({'error': '入口からの距離（m）は数値で入れてください'}), 400
+        if distance is not None and distance < 0:
+            return jsonify({'error': '距離は 0 以上にしてください'}), 400
+        kind = 'wifi' if data.get('kind') == 'wifi' else 'ble'
+        try:
+            exists = supabase.table(TABLE_AP_NODES).select("mac").eq('mac', mac).execute().data
+            if exists:
+                return jsonify({'error': 'その MAC はもう登録されています（表の行を直してください）'}), 409
+            supabase.table(TABLE_AP_NODES).insert({
+                'mac': mac, 'label': (str(data.get('label') or '').strip()[:32]) or None,
+                'distance_m': distance, 'enabled': True, 'fw': f'{kind}-manual',
+            }).execute()
+            return jsonify({'message': 'created'})
+        except Exception as e:
+            print(f"Error creating ap node {mac}: {e}")
+            return jsonify({'error': '追加に失敗しました'}), 500
 
     update = {}
     if 'label' in data:
