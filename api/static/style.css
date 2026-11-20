@@ -1169,3 +1169,91 @@ input[type="checkbox"]:checked {
   border: 1px dashed rgba(25, 76, 34, 0.5);
   padding: 0 4px;
 }
+
+/* 各欄の「使い方」（見出しの右。押すと説明を重ねて開く。閉じているときは高さを取らない） */
+.card-help {
+  position: relative;
+  margin-left: auto;
+}
+.card-help > summary {
+  list-style: none;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--ink);
+  border: 2px solid var(--pixel-dark-alpha);
+  background: rgba(255, 255, 255, 0.6);
+  padding: 0 8px;
+  user-select: none;
+}
+.card-help > summary::-webkit-details-marker {
+  display: none;
+}
+.card-help > summary::before {
+  content: "? ";
+}
+.card-help[open] > summary {
+  background: var(--pixel-blue);
+  color: #fff;
+}
+.card-help-body {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  width: min(560px, 86vw);
+  z-index: 30;
+  background: #fff;
+  border: 3px solid var(--pixel-dark-alpha);
+  box-shadow: 4px 4px 0 rgba(0, 0, 0, 0.15);
+  padding: 10px 14px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--ink);
+  text-align: left;
+}
+.card-help-body p,
+.card-help-body ul {
+  margin: 0 0 6px;
+}
+.card-help-body ul {
+  list-style: disc;
+  padding-left: 1.2em;
+}
+.card-help-body li {
+  margin-bottom: 3px;
+}
+
+/* ESP32 AP の「手で追加」欄（表は 5 秒ごとに描き直すので、入力欄は表の外に置く） */
+.ap-node-add {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin-top: 8px;
+}
+.ap-node-add .input {
+  width: auto;
+  min-width: 140px;
+  flex: 1 1 140px;
+  min-height: 0;
+  padding-top: 3px !important;
+  padding-bottom: 3px !important;
+  font-size: 13px;
+}
+.ap-node-add select {
+  min-height: 0;
+  padding-top: 2px !important;
+  padding-bottom: 2px !important;
+  font-size: 13px;
+}
+.ap-node-add-label {
+  font-size: 13px;
+  color: var(--ink);
+}
+.ap-position-label {
+  white-space: nowrap;
+}
+/* 使い方を開いている欄を、後ろの欄より前に出す（開いた説明が下の欄に隠れないように） */
+.box:has(.card-help[open]) {
+  position: relative;
+  z-index: 40;
+}

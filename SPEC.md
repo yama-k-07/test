@@ -120,7 +120,7 @@
 | `TABLE_WIFI_REPORTS` | ★`latest_wifi_reports` | `device_id`（推定） | 各デバイスの最新1行（推定） | ウォッチ or DB | ブラウザ（Realtime）、デバッグ API |
 | `TABLE_AREA_STATUS` | ★`area_status_v2` | `area_id` | `area_id`, `bssid`, `instruction`, `fire`, `area_order` | Flask | Flask（ウォッチも読む可能性） |
 | `TABLE_USER` | `user` | `device_id` | `device_id`, `username` | Flask | Flask |
-| `TABLE_AP_POSITIONS` | `ap_positions` | `mac` | `mac`, `position`（0〜5） | Flask | Flask |
+| `TABLE_AP_POSITIONS` | `ap_positions` | `mac` | `mac`, `position`（番号。0〜5 は既設の6台、新しい AP は 6 から自動）, `distance_m`（入口からの距離。`supabase/ap_positions_distance.sql` で追加。空なら番号 0〜5 の距離） | Flask | Flask |
 | `TABLE_AP_PRESETS` | `ap_position_presets` | `name` | `name`, `positions`（`[{mac, position}]`）, `updated_at` | Flask | Flask |
 | `TABLE_DEVICE_INSTRUCTIONS` | ★`device_instructions` | `device_id` | `device_id`, `instruction`（`none/wait/inward/outward`）, `report`, `updated_at` | Flask | Flask、ウォッチ |
 | `TABLE_ENTRY_CURRENT` | `entry_current` | `device_id` | `device_id`, `username`, `status`（`in/out`）, `entry_time`, `exit_time`, `updated_at` | Flask | Flask |
@@ -176,8 +176,8 @@
 
 | メソッド パス | リクエスト | 動作 |
 |---|---|---|
-| `GET/POST/DELETE /api/ap_positions` | POST `{mac, position}` / DELETE `{mac}` | 既設 AP の位置番号。GET は `position` 昇順 |
-| `GET/POST/DELETE /api/ap_presets` | POST `{name, positions:[{mac, position}]}` / DELETE `{name}` | AP 位置設定のプリセット。GET は名前順 |
+| `GET/POST/DELETE /api/ap_positions` | POST `{mac, distance_m, position?, original_mac?}` / DELETE `{mac}` | 現場の Wi-Fi AP。GET は番号順で `distance_m`・`label`（AP1〜AP11、新しい AP は AP#7〜）付き。POST で `position` を省くと番号を自動で振る（既設の 0〜5 と重ねず、今の最大＋1）。MAC は大文字に揃え、大文字小文字違い・`original_mac` の古い行は消して付け替える。`distance_m` 列が無い DB では位置番号だけ保存して `warning` を返す |
+| `GET/POST/DELETE /api/ap_presets` | POST `{name, positions:[{mac, distance_m, position?}]}` / DELETE `{name}` | AP 位置設定のプリセット。GET は名前順。古い `{mac, position}` だけのプリセットは、読み込むときに番号の距離を入れる |
 | `GET /api/device_instructions` | | 全行 |
 | `POST /api/device_instructions` | `{device_id, instruction, report?}` | `instruction ∈ {none, wait, inward, outward}` を検証して upsert |
 | `GET /api/wifi_map` | | マップ用の全データ（下）。**呼ぶたびに DB に書き込む**（§6.10） |
@@ -188,6 +188,7 @@
 | `DELETE /api/fire_location` | | 火災位置を解除し、全デバイスを `fire_active=false` に |
 | `GET /api/ap_nodes` | | `ap_nodes` 全行＋`online`（heartbeat が 90 秒以内）。距離順 |
 | `POST /api/ap_nodes` | `{mac, label?, distance_m?, enabled?}` | ESP32 AP の設定変更 |
+| `POST /api/ap_nodes`（追加） | `{create: true, mac, label?, distance_m?, kind: 'ble'\|'wifi'}` | 画面から ESP32 を追加（上り回線の無い ESP32 など）。`fw` は `ble-manual` / `wifi-manual`、既にある MAC は 409。あとで本物の heartbeat が届くと `fw` などは実物になり、名前と距離は残る |
 | `DELETE /api/ap_nodes` | `{mac}` | 削除（動いていれば次の heartbeat で再登録） |
 | `GET /api/debug/wifi_map` | | 生のテーブルと読み込み結果（`load_ap_map` を含む） |
 
@@ -244,7 +245,7 @@
 
 | 出どころ | 距離の決め方 | 表示名 | 死活 |
 |---|---|---|---|
-| AP位置設定（`ap_positions`） | 位置番号 0〜5 → `AP_DISTANCES_M = [0, 100, 200, 300, 400, 500]` | `AP` + `AP_LABELS`（`1,3,4,5,6,11`。**AP の名前で距離ではない**） | 分からない（`manual`） |
+| AP位置設定（`ap_positions`、`load_ap_position_rows`） | `distance_m`。空なら位置番号 0〜5 → `AP_DISTANCES_M = [0, 100, 200, 300, 400, 500]`（6 以降で空なら使わない） | 番号 0〜5 は `AP` + `AP_LABELS`（`1,3,4,5,6,11`。**AP の名前で距離ではない**）、6 以降は `AP#7` のように番号＋1（`ap_position_label`） | 分からない（`manual`） |
 | ESP32 AP（`ap_nodes`） | 行ごとの `distance_m`。`enabled=false` と距離未設定は使わない | `label`（無ければ MAC の末尾） | `last_seen` が `AP_NODE_ONLINE_SEC`（90秒）以内なら稼働中 |
 
 - MAC は `norm_mac()`（前後の空白を除いて大文字）で揃えて比べる。Android の BSSID は小文字、ESP32 は大文字で報告するため。
@@ -377,8 +378,7 @@
 | トンネルマップ（個別指示・区間の指示・火災も） | `canvas#tunnelMap`, `#workerPopup`, `#fireModeBtn`, `#fireClearBtn`, `#fireStatus`, 凡例 | `loadTunnelMap` / `renderTunnelMap` / `openWorkerPopup` / `openSegmentPopup` / `toggleFireMode` ほか | `/api/wifi_map`, `/api/device_instructions`, `/api/segment_instructions`, `/api/fire_location` |
 | 入場管理 | `#entryCurrentBody`, `#entryLogBody` | `loadEntryManagement` / `renderEntryCurrentTable` / `renderEntryLogTable` | `/api/entry_management`, `/api/entry_log?limit=30` |
 | ― 設定 ― | | | |
-| AP位置設定 | `#apPositionsTableBody`, `#apPresetSelect`, `#apPresetNameInput` | `loadApPositionsTable` / `saveApPositionsTable` / `loadApPreset` / `saveApPreset` / `deleteApPreset` | `/api/ap_positions`, `/api/ap_presets` |
-| エリア割当設定 | `#areaTableBody` | `loadAreaMapTable` / `saveAreaMapTable` / `removeAreaRow` | `/api/area` |
+| AP位置設定（現場の Wi-Fi AP） | `#apPositionsTableBody`, `#apPresetSelect`, `#apPresetNameInput` | `loadApPositionsTable` / `addApPositionRow` / `saveApPositionsTable` / `removeApPositionRow` / `loadApPreset` / `saveApPreset` / `deleteApPreset` | `/api/ap_positions`, `/api/ap_presets` |
 | ユーザー設定 | `#userTableBody` | `loadUserTable` / `saveUserTable` / `removeRow` | `/api/user` |
 | ESP32 AP（設定の下） | `#apNodesTableBody` | `loadApNodesTable` / `saveApNode` / `deleteApNode` | `/api/ap_nodes` |
 | カメラ（トンネルマップの下。表では順番を後ろに書いている） | `#cameraGrid`, `#cameraSettingsBody` | `loadCameras` / `startCameraView` / `stopCameraView` / `fetchCameraFrame` / `saveCamera` / `deleteCamera` | `/api/cameras`, `/api/camera_frame/<id>` |
@@ -387,7 +387,9 @@
 ### 7.2 更新の仕組み
 - **読み込み時**（`DOMContentLoaded`）に全セクションを1回読む。トンネルマップのクリック操作と Realtime 購読もここで始める。
 - 「エリアごとの状態」のカード（`loadAreaBoard` / `createAreaCard`、SortableJS の並べ替え）は 2026-11-20 に削除し、AP の区間ごとの指示（§7.4）に置き換えた。`/api/area_status` などのログイン不要 API はウォッチのために残している。
-- **5 秒ごと**（`setInterval`）に `loadAreaMapTable`、`loadUserTable`、`loadEntryManagement`、`loadApNodesTable`、`loadCameras`、`loadPositionSettings`、`loadPositionEval`、`loadTunnelMap` を呼ぶ。AP位置設定とプリセット一覧は読み込み時だけ。
+- 「エリア割当設定」の表（`loadAreaMapTable` ほか）は 2026-11-21 に削除した。エリアの BSSID の割当（`area_status_v2.bssid`）は DB と `/api/area` に残り、位置推定のエリアの決め方（§6.4）と入退場のエリアには今も使われる。変えるときは Supabase の画面か API で。
+- **使い方**：どの欄も見出しの右に「? 使い方」（`<details class="card-help">`）があり、押すと説明が重なって開く。閉じているときは高さを取らない。開いている欄は前面に出す（`.box:has(.card-help[open])`）。
+- **5 秒ごと**（`setInterval`）に `loadUserTable`、`loadEntryManagement`、`loadApNodesTable`、`loadCameras`、`loadPositionSettings`、`loadPositionEval`、`loadTunnelMap` を呼ぶ。AP位置設定とプリセット一覧は読み込み時だけ。
 - **Realtime**：anon key で `latest_wifi_reports` の変更を購読し、変更が来たら `loadTunnelMap()`。Supabase 側で Realtime が有効でないと何も起きない（エラーにもならない）。
 - **ちらつき防止**：表やカードは、前回の応答（`JSON.stringify`）を `last*Sig` に覚えておき、同じなら描き直さない。マップは毎回描き直す。
 - **入力中は止める**：`input` / `select` にフォーカスがある間は `isEditing=true` になり、定期更新を丸ごと止める。
@@ -439,14 +441,15 @@
 - 時刻はブラウザのローカル時間で `MM/DD HH:MM:SS` と表示する（`formatEntryTime`）。
 
 ### 7.7 設定画面
-- **AP位置設定**：行ごとに MAC と位置（「AP3（100m）」のようなプルダウン。`AP_LABELS` / `AP_POSITION_DISTANCES_M`）。
-  - 「保存」で1行ずつ POST する。行の削除は即 DELETE。
-  - プリセット：選んで「読み込み」を押すと表に広げるだけで、反映するには「保存」が要る。ほかに「プリセットとして保存」と「削除」。
-- **エリア割当設定**：エリア ID と BSSID の対応。「保存」で1行ずつ POST、行の削除は即 DELETE。
+- **AP位置設定（現場の Wi-Fi AP）**：行ごとに番号（自動。AP1〜AP11、新しい AP は AP#7〜）、MAC、入口からの距離 [m]。
+  - 「新規追加」で空の行を足し、MAC と距離を入れて「保存」。保存は1行ずつ POST（番号は送らず、サーバーが振る）。MAC を書き換えた行は元の MAC も送って付け替える。行の削除は確認のあと即 DELETE。
+  - プリセット：選んで「読み込み」を押すと表に広げるだけで、反映するには「保存」が要る。ほかに「プリセットとして保存」（MAC と距離）と「削除」。
+- **エリア割当設定**：2026-11-21 に削除（§7.2）。
 - **ユーザー設定**：ユーザー名とデバイス ID。
   - 「保存」では、デバイス ID を変えた行の古い ID を DELETE してから全行を POST する。行の削除は即 DELETE。
   - 定期更新のとき、まだ保存していない入力は残す。
-- **ESP32 AP**：状態（稼働中／停止）、表示名、BSSID、入口からの距離、位置推定に使うか（プルダウン）、最終通信、保存・削除。
+- **ESP32 AP**（設定の下）：状態（稼働中／停止／手動登録）と種類（BLE / Wi-Fi。`fw` が `ble-` で始まれば BLE）、表示名、MAC、入口からの距離、位置推定に使うか（プルダウン）、最終通信、保存・削除。
+  - 表の下の「手で追加」欄（MAC・表示名・距離・種類 → 「追加」、`addApNode`）で、上り回線の無い ESP32 も登録できる。表は 5 秒ごとに描き直すので、入力欄は表の外に置いている。
   - 保存は `POST /api/ap_nodes`。保存後はマップも描き直す。
   - 「使う・使わない」をチェックボックスにしないのは、全体の仕組み（§7.8）で行が赤く点滅してしまうため。
 
@@ -491,7 +494,7 @@
 2. Arduino IDE に「esp32 by Espressif Systems」を入れ、ボードは ESP32S3 Dev Module を選ぶ。
 3. `config.h` を作って書き込む。
 4. 電源を入れると「ESP32 AP」表に出るので、距離を確認して保存する。
-5. 上り回線が無い場合は、シリアル（115200bps）に出る BLE の `address` を「AP位置設定」に手で登録する。1.x（Wi-Fi）から入れ替えると「ESP32 AP」表に BLE アドレスの新しい行ができるので、距離を入れて古い行を削除する。この場合は6か所・100m 間隔の位置番号しか選べない。
+5. 上り回線が無い場合は、シリアル（115200bps）に出る BLE の `address` を「ESP32 AP」表の下の「手で追加」で登録する。1.x（Wi-Fi）から入れ替えると「ESP32 AP」表に BLE アドレスの新しい行ができるので、距離を入れて古い行を削除する。
 
 使っている Arduino-ESP32 の API は、公式ドキュメントと `WiFiGeneric.h` / `WiFiType.h` / `WiFiScan.h` で存在を確認済み。2026-11-18 に Arduino-ESP32 3.3.13（ESP32S3 Dev Module、標準パーティション）で**コンパイル成功**（フラッシュ 75%・RAM 14%。機能を足すならパーティションを広げる）。実機での動作はまだ確認していない。
 
@@ -618,6 +621,7 @@
 | 2026-10-11 | #25 | マップから個別指示、位置推定の一本化と平滑化、UI 改善、火災位置の通知、ログイン画面、仕様書・CodeQL 指摘の修正 |
 | 2026-11-11 | #26 | AP を 100m 間隔に修正、`ApMap`、ESP32-S3 AP（heartbeat・管理画面・ファームウェア）、AGENTS.md ほか開発支援。**本番デプロイは失敗中** |
 | 2026-11-18 | #28〜#30 | ESP32 カメラ（外から見るコマ送り、RGB565→JPEG 変換）、カメラが位置の目印を兼ね距離を ESP32 AP 表と連動 |
+| 2026-11-21 | — | エリア割当設定の欄を削除。AP位置設定を「MAC と距離（番号は自動）」に（`ap_positions.distance_m`）。ESP32 AP を画面から追加。全部の欄に折りたためる「使い方」 |
 | 2026-11-20 | — | 位置推定の欄をマップの真上、ESP32 AP 欄を設定の下へ。位置推定 ⑥（Wi-Fi と BLE を合わせる）、⑤ の探す範囲を前後1区間に、`SERIES_WALK_MPS` 3.0。デモ用 `scripts/demo_watch.py` |
 | 2026-11-20 | — | エリアカードを削除し、AP の区間ごとの指示（個別指示として送る）に。マップの点線を AP の区間に。ESP32 AP 欄をマップの真上に（1366×768 でスクロールせずに両方見える）。位置推定 ⑤（Wi-Fi だけ・上位3つの当てはめ） |
 | 2026-11-19 | — | ウォッチのスキャンを RSSI 上位3つで `wifi_reports_v2` / `ble_reports` に。位置推定を ①〜④ の4方式にし、画面で切り替え・現地で比較記録 |

@@ -53,13 +53,9 @@ def load_app():
 def ap_layout(appmod):
     """(wifi: [(mac, 距離)], ble: [(mac, 距離)])"""
     wifi, ble = {}, {}
-    for mac, pos in appmod.load_ap_positions().items():
-        try:
-            pos = int(pos)
-        except (TypeError, ValueError):
-            continue
-        if mac and 0 <= pos < appmod.AP_COUNT:
-            wifi[appmod.norm_mac(mac)] = appmod.AP_DISTANCES_M[pos]
+    for row in appmod.load_ap_position_rows():   # 距離は distance_m か位置番号から（サーバーと同じ）
+        if row.get('mac') and row.get('distance_m') is not None:
+            wifi[appmod.norm_mac(row['mac'])] = row['distance_m']
     for n in appmod.load_ap_nodes():
         if not n.get('mac') or n.get('enabled') is False or n.get('distance_m') is None:
             continue
