@@ -229,6 +229,7 @@ const POSITION_METHOD_SHORT = {
   rssi_basic: '③ RSSI',
   rssi_series: '④ RSSI＋時系列',
   wifi3_series: '⑤ Wi-Fi 3点',
+  fusion_series: '⑥ Wi-Fi＋BLE',
 };
 const POSITION_SOURCE_LABELS = { wifi: 'Wi-Fi', ble: 'BLE', wifi_legacy: 'Wi-Fi（旧形式・RSSI なし）' };
 
@@ -329,25 +330,28 @@ async function savePositionMethod() {
   loadTunnelMap();
 }
 
+// 方式ごとの誤差を、方式を横に並べた3行の表にする（マップの真上に置くので縦を短く）
 async function loadPositionEval() {
+  const head = document.getElementById('positionEvalHead');
   const body = document.getElementById('positionEvalBody');
-  if (!body) return;
+  if (!head || !body) return;
   try {
     const res = await fetch('/api/position_eval');
     if (!res.ok) return;
     const data = await res.json();
-    const sig = JSON.stringify(data.summary);
+    const summary = data.summary || [];
+    const selected = lastWifiMapData?.position_method;
+    const sig = JSON.stringify([summary, selected]);
     if (sig === lastPositionEvalSig) return;
     lastPositionEvalSig = sig;
     const fmt = v => (v === null || v === undefined ? '—' : `${v}m`);
-    body.innerHTML = (data.summary || []).map(s => `
-      <tr>
-        <td>${escapeHtml(s.label)}</td>
-        <td>${s.count}</td>
-        <td>${fmt(s.mean_abs_m)}</td>
-        <td>${fmt(s.p90_abs_m)}</td>
-      </tr>
-    `).join('');
+    const cls = s => (s.key === selected ? ' class="is-selected-method"' : '');
+    head.innerHTML = `<tr><th></th>${summary.map(s =>
+      `<th${cls(s)} title="${escapeHtml(s.label)}">${escapeHtml(POSITION_METHOD_SHORT[s.key] || s.label)}</th>`).join('')}</tr>`;
+    const row = (label, f) => `<tr><th>${label}</th>${summary.map(s => `<td${cls(s)}>${f(s)}</td>`).join('')}</tr>`;
+    body.innerHTML = row('記録の数', s => s.count)
+      + row('平均の誤差', s => fmt(s.mean_abs_m))
+      + row('誤差の大きい側（90%）', s => fmt(s.p90_abs_m));
   } catch (e) {
     console.error('loadPositionEval error:', e);
   }
