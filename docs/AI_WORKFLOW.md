@@ -85,19 +85,93 @@ ESP32 AP の heartbeat に、基板の温度を追加で送りたい。ファー
 
 ---
 
-## 4. 書き換えたあと
+## 4. 編集から本番反映までの流れ
 
-1. 変更を手元で確かめる（AGENTS.md §5。`api/.env` を置いて `cd api && python app.py`。**本番と同じ DB につながるので書き込み系の操作は注意**）
-2. `main` に直接ではなく、ブランチを切ってコミットし、プルリクエストを作る
-   ```bash
-   git switch -c feature/やったこと
-   ```
-3. AI が「SPEC.md の更新」や「SQL の実行」を挙げていたら、それも忘れずに
-4. 関数名を変えた・ファイルを足したなど、**AGENTS.md §3 の表が古くなる変更をしたら AGENTS.md も直す**（次に AI に聞く人が困らないように）
+`main` に入ったものは Vercel で**自動で本番に出ます**。直接 `main` には書かず、必ずブランチ → プルリクエスト（PR）で入れます。
+
+### 4-1. 始める前に（毎回）
+```bash
+git switch main
+```
+```bash
+git pull
+```
+- 最新を取ってから始める（古いまま書くと、ほかの人の変更とぶつかる）
+- チャット AI を使う人は、ここで `python scripts/make_ai_context.py` を実行して、まとめファイルを作り直してアップロードし直す（§2-B）
+
+### 4-2. ブランチを作る
+```bash
+git switch -c feature/やること
+```
+- 名前は内容が分かるように（例 `feature/map-offline-minutes`、`fix/fire-message`）
+- 1つのブランチには1つの目的だけ。関係ない変更を混ぜない
+
+### 4-3. AI に聞いて書き換える
+- §3 の頼み方で聞く。答えの「置き換え前」が本当にファイルにあるか確かめてから書き換える
+- AI が「SPEC.md の更新」を挙げたら SPEC.md も直す。関数名を変えた・ファイルを足したら AGENTS.md §3 の表も直す
+- 仕様書や関数名を変えたら `python scripts/build_spec_qa.py` も実行しておく（Q&A ページの作り直し。公開し直しはオーナー）
+
+### 4-4. 手元で確かめる
+- `api/.env` を置いて `cd api && python app.py` → http://localhost:5000（AGENTS.md §5）
+- **`.env` は本番と同じ Supabase を指していることが多い。** 手元で押したボタンも本番のデータを変える。指示・火災・削除のボタンを試すときは、本物のウォッチに届くことを忘れずに
+- ウォッチが無くても、§5 のデモで作業者を歩かせて確かめられる
+
+### 4-5. コミットして PR を作る
+```bash
+git add 変えたファイル
+```
+```bash
+git commit -m "何をなぜ変えたか（日本語で OK）"
+```
+```bash
+git push -u origin feature/やること
+```
+- push したら GitHub に出る「Compare & pull request」から PR を作る（`gh` コマンドが使えるなら `gh pr create`）
+- PR の説明には「何を変えたか」「どう確かめたか」「SQL の実行が要るか」を書く
+- **`api/.env`・`config.h`・`configs/*.h`（パスワードやトークン入り）は絶対にコミットしない**（.gitignore で除いてあるが、`git add .` の前に `git status` で確かめる）
+
+### 4-6. マージと本番反映
+- PR はオーナー（またはもう1人）が見てからマージする。自分の PR を自分ですぐマージしない
+- **SQL の変更がある PR は、マージ前に Supabase の SQL Editor で実行する**（`supabase/*.sql`）。順番が逆だと、本番でエラーになることがある
+- マージすると 1〜2 分で本番に出る。本番の画面を Ctrl+F5 で開き直して確かめる
+- 同じファイルを2人が同時に変えていると、PR に「conflict（衝突）」と出る。そのときは `git pull origin main` で取り込み、ぶつかった所を直してから push し直す（分からなければ AI に「この conflict の直し方」とファイルの該当部分を貼って聞く）
+
+### 4-7. ウォッチ・ESP32 に関わる変更
+- `wifi_reports`・`wifi_reports_v2`・`ble_reports`・`device_instructions` などの列や値（AGENTS.md §4 の「ウォッチとの約束」）を変えるときは、**PR の前にウォッチ担当と相談する**
+- ESP32 のファームウェアを変えたら、実機に書き込んで動くことを確かめてから PR にする（カメラは `python scripts/flash_camera.py <カメラID> <ポート>`）
 
 ---
 
-## 5. なぜこのやり方なのか
+## 5. デモ（ウォッチ無しで動かす）
+
+`scripts/demo_watch.py` が、ウォッチの代わりに「トンネルを歩く作業者」のスキャン結果を Supabase に入れ続けます。マップ・区間の指示・位置推定の比較が、本物のウォッチと同じように動きます。
+
+**注意: `api/.env` の Supabase（ふつうは本番）に書き込みます。** デモ用の装置 ID は `demo-01`、`demo-02`… で、終わったら `--cleanup` でまとめて消せます。
+
+1. まず書き込まずに中身を見る（20 秒で終わる）
+   ```bash
+   python scripts/demo_watch.py --dry-run
+   ```
+2. デモを始める（2 人が 10 分歩く。Ctrl+C で止める）
+   ```bash
+   python scripts/demo_watch.py
+   ```
+   - 人数・時間: `--workers 3 --minutes 5`
+   - Wi-Fi だけの場面: `--no-ble`
+   - 方式の比べ方も見せる: `--auto-eval`（15 秒ごとに「本当の位置」と ①〜⑥ の推定を記録。「位置推定の方式」の表に方式ごとの誤差がたまる）
+3. ダッシュボードを開く。`demo-01` などがマップ上を動く。区間に指示を出すと、その区間にいるデモの作業者にも届く
+4. 終わったら必ず消す
+   ```bash
+   python scripts/demo_watch.py --cleanup
+   ```
+   `wifi_reports`・`wifi_reports_v2`・`ble_reports`・`device_instructions`・`device_segment_state`・`entry_current`・`entry_log`・`position_eval` の、`demo-` で始まる行だけを消す（本物の装置の行は消さない）
+
+- 電波はシミュレーション（距離で弱くなる式＋ばらつき）なので、実際のトンネルとは違う。方式の良し悪しは、最後は現地で記録して決める
+- AP の配置は、画面の「AP位置設定」と「ESP32 AP」表から読む（fw が `ble-` の ESP32 は BLE ビーコン、それ以外は Wi-Fi AP）。距離が入っていない AP は使わない
+
+---
+
+## 6. なぜこのやり方なのか
 
 - `AGENTS.md` は多くの AI 開発ツールが共通で読むファイル名。1か所に書けば、どの AI にも同じ説明が届く
   （Claude Code 用の `CLAUDE.md` も中身は AGENTS.md を読み込むだけにしてある）

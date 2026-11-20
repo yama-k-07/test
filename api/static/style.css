@@ -1115,7 +1115,50 @@ input[type="checkbox"]:checked {
   background: #fff;
   z-index: 1;
 }
-.ap-nodes-box + .box {
+/* ESP32 AP 欄は 2026-11-20 に設定の下へ戻した（マップの真上は「位置推定の方式」）。下では表の高さを制限しない */
+.ap-nodes-box.is-bottom .ap-nodes-scroll {
+  max-height: none;
+}
+
+/* 位置推定の方式（マップの真上）: 見出し・方式の選択・削除を1行に、誤差の表は方式を横に並べて3行 */
+.position-box {
+  padding-top: 10px;
+  padding-bottom: 8px;
+  margin-bottom: 12px !important;
+}
+.position-box .box-head {
+  margin-bottom: 4px;
+}
+.position-box .position-method-field {
+  margin-bottom: 0 !important;
+}
+.position-box .position-method-field select {
+  min-height: 0;
+  padding-top: 2px !important;
+  padding-bottom: 2px !important;
+  font-size: 13px;
+}
+.position-eval-scroll {
+  margin-bottom: 4px !important;
+}
+.position-eval-scroll .table {
+  font-size: 13px;
+}
+.position-eval-scroll .table th,
+.position-eval-scroll .table td {
+  padding-top: 1px;
+  padding-bottom: 1px;
+  white-space: nowrap;
+}
+.position-eval-scroll .is-selected-method {
+  font-weight: bold;
+  background: rgba(32, 124, 229, 0.10);
+}
+.position-box > .section-hint {
+  font-size: 12px;
+  margin: 0;
+}
+.position-box + .box {
   padding-top: 12px;
 }
 

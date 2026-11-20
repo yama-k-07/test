@@ -415,8 +415,11 @@ POSITION_METHODS = [
     ('rssi_basic', '③ RSSI の差＋今までの平滑化'),
     ('rssi_series', '④ RSSI の差＋時系列（カルマン）'),
     ('wifi3_series', '⑤ Wi-Fi だけ・上位3つの当てはめ＋時系列'),
+    ('fusion_series', '⑥ Wi-Fi と BLE をそれぞれ向いた計算で合わせる＋時系列'),
 ]
 POSITION_METHOD_KEYS = [k for k, _ in POSITION_METHODS]
+# position_eval に後から ALTER TABLE で足した列（無い DB でも記録できるよう、失敗したら外して保存し直す）
+POSITION_EVAL_LATER_COLUMNS = ['wifi3_series', 'fusion_series']
 DEFAULT_POSITION_METHOD = 'top2_basic'   # 今までと同じ結果
 
 # ③: RSSI の差から、強い AP(a) と次の AP(b) の間のどこにいるかを出す（距離減衰 RSSI = P0 - 10·n·log10(r)）。
@@ -433,7 +436,7 @@ SOURCE_SIGMA_SPACINGS = {'wifi': 0.35, 'ble': 0.25}
 # ②④: カルマンフィルタ（1次元、位置だけ）。人の速さを超える飛びは捨てる。
 SERIES_WINDOW_SEC = 60        # この秒数分のスキャンを使う
 SERIES_MAX_SAMPLES = 60
-SERIES_WALK_MPS = 1.5         # 位置のゆらぎ（人が歩く速さ）[m/s]
+SERIES_WALK_MPS = 3.0         # 位置のゆらぎ [m/s]。人の歩く速さより大きめにして遅れを減らす（1.5 → 3.0 でシミュレーションの誤差が減った）
 SERIES_MAX_SPEED_MPS = 3.0    # これを超える速さでしか説明できない飛びは捨てる [m/s]
 SERIES_GATE_SIGMA = 3.0       # 予測から 3σ を超えた値は捨てる
 SERIES_RESET_AFTER = 3        # 続けてこの回数捨てたら、本当に動いたとみなして新しい値から始め直す
@@ -483,10 +486,14 @@ def scan_wifi3_m(scan, ap_map):
     with_rssi = [(d, r) for d, r in known if r is not None]
     if len(with_rssi) < 2:
         return scan_top2_m(scan, ap_map)
-    lo = ap_map.start - ap_map.spacing * 0.5
-    hi = ap_map.end + ap_map.spacing * 0.5
+    # 探すのは「いちばん強い AP の前後 1 区間」だけ（トンネル全体だと、遠い AP の電波のぶれで離れた所を選ぶことがある。
+    # シミュレーションで平均誤差が 28m → 14m に減った。scripts/demo_watch.py の電波モデル、2026-11-20）
+    d0 = with_rssi[0][0]
+    all_d = sorted({e['distance_m'] for e in ap_map.entries.values()})
+    lo = max([d for d in all_d if d < d0], default=d0 - ap_map.spacing * 0.5)
+    hi = min([d for d in all_d if d > d0], default=d0 + ap_map.spacing * 0.5)
     best_x, best_err = None, None
-    steps = int((hi - lo) / WIFI3_STEP_M) + 1
+    steps = int(round((hi - lo) / WIFI3_STEP_M)) + 1
     for k in range(steps):
         x = lo + k * WIFI3_STEP_M
         terms = [(r, 10 * PATH_LOSS_N * math.log10(math.sqrt((x - d) ** 2 + WIFI3_AP_HEIGHT_M ** 2))) for d, r in with_rssi]
@@ -497,9 +504,19 @@ def scan_wifi3_m(scan, ap_map):
     return best_x
 
 
-SCAN_ESTIMATORS = {'top2': scan_top2_m, 'rssi': scan_rssi_m, 'wifi3': scan_wifi3_m}
-# 方式ごとに作る組み合わせ（1回分の求め方 → basic / series）。⑤ は series だけ
-SCAN_ESTIMATOR_MODES = {'top2': ('basic', 'series'), 'rssi': ('basic', 'series'), 'wifi3': ('series',)}
+def scan_fusion_m(scan, ap_map):
+    """⑥ スキャンの種類ごとに向いた計算を使う: BLE は ③（RSSI の差。回数が多く2つの間に置くので十分）、
+    Wi-Fi は ⑤（3つ目まで使う当てはめ）。どちらも同じ時系列（カルマン）に入れ、
+    ばらつき SOURCE_SIGMA_SPACINGS（BLE の方が小さい＝重い）で自然に重み付けされる"""
+    if scan['source'] == 'ble':
+        return scan_rssi_m(scan, ap_map)
+    return scan_wifi3_m(scan, ap_map)
+
+
+SCAN_ESTIMATORS = {'top2': scan_top2_m, 'rssi': scan_rssi_m, 'wifi3': scan_wifi3_m, 'fusion': scan_fusion_m}
+# 方式ごとに作る組み合わせ（1回分の求め方 → basic / series）。⑤ ⑥ は series だけ
+SCAN_ESTIMATOR_MODES = {'top2': ('basic', 'series'), 'rssi': ('basic', 'series'),
+                        'wifi3': ('series',), 'fusion': ('series',)}
 
 
 def series_distance_m(points, ap_map):
@@ -1731,7 +1748,14 @@ def handle_position_eval():
            'sources': ','.join(pos.get('sources') or []), 'note': str(data.get('note') or '')[:200] or None}
     row.update({k: (pos.get('methods') or {}).get(k) for k in POSITION_METHOD_KEYS})
     try:
-        supabase.table(TABLE_POSITION_EVAL).insert(row).execute()
+        try:
+            supabase.table(TABLE_POSITION_EVAL).insert(row).execute()
+        except Exception as e:
+            # 後から足した方式の列（ALTER TABLE）がまだ無い DB では、その列を外して保存する
+            print(f"position_eval insert retry without newer columns: {e}")
+            for k in POSITION_EVAL_LATER_COLUMNS:
+                row.pop(k, None)
+            supabase.table(TABLE_POSITION_EVAL).insert(row).execute()
     except Exception as e:
         print(f"Error saving position_eval: {e}")
         return jsonify({'error': '保存に失敗しました（supabase/scan_reports.sql は実行済みですか？）'}), 500

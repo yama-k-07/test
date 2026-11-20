@@ -267,11 +267,13 @@
 | ③ `rssi_basic` | `scan_rssi_m`: RSSI の差で強い2つの AP の間に置く | `smooth_distance_m` |
 | ④ `rssi_series` | `scan_rssi_m` | `series_distance_m` |
 | ⑤ `wifi3_series` | `scan_wifi3_m`: **Wi-Fi だけ**、上位3つの RSSI に距離減衰の式を当てはめる | `series_distance_m` |
+| ⑥ `fusion_series` | `scan_fusion_m`: **Wi-Fi と BLE の両方**。BLE は ③、Wi-Fi は ⑤ で1回分を出す | `series_distance_m`（両方を1本に。BLE の方がばらつきが小さい＝重い） |
 
 - **使うスキャン**（`load_recent_scans`）: 新しい表 `wifi_reports_v2` / `ble_reports`（RSSI 上位3つ）に行がある装置はそれだけを使い、無い装置は旧 `wifi_reports`（RSSI なし。① = ③、② = ④ になる）。装置の一覧は旧 `wifi_reports` の最新行のまま（移行中はウォッチが両方に送る。`docs/WATCH_SCAN_REPORTS.md`）。
 - **③ の計算**: 強い AP を a、次の AP を b とし、距離減衰 `RSSI = P0 − 10·n·log10(r)` から `RSSI_a − RSSI_b = 10·n·log10(r_b / r_a)`、`r_a + r_b = |d_a − d_b|` を解いて `d_a` から `r_a` だけ b 側に置く。`PATH_LOSS_N = 2.0`（仮置き、現地の記録で決める）。差を使うので機種ごとの出力の違いは打ち消し合う。例: 100m が -60dBm・200m が -70dBm → 約 124m。RSSI が無いスキャンは ① と同じ
-- **⑤ の計算**（2026-11-20〜）: Wi-Fi のスキャンだけを使う（BLE のスキャンでは値を出さない）。トンネル上の地点 x を 1m 刻みで動かし、AP i までの距離 `r_i = √((x − d_i)² + 3²)`（高さの差 `WIFI3_AP_HEIGHT_M = 3`）から予想 RSSI `A − 10·n·log10(r_i)` を作って、実際の RSSI との差の二乗和が最小の x を選ぶ。A（機種の出力）は x ごとに最小二乗で決めるので要らない。③ が「強い2つの AP の間に置く」のに対し、⑤ は3つの AP すべてに合う1点を探すので、2つの AP の外側にいる場合や、1つの AP の RSSI がずれた場合にも対応できる。RSSI が2つ未満なら ① と同じ。雑音のない RSSI では 30m・130m・260m を ±1m で当てることをテストで確認
-- **② ④ の計算**: 位置のゆらぎ `SERIES_WALK_MPS = 1.5` m/s、測定のばらつき = `SOURCE_SIGMA_SPACINGS`（Wi-Fi 0.35・BLE 0.25）× AP 間隔。予測から 3σ を超え、かつ `SERIES_MAX_SPEED_MPS = 3` m/s でも届かない飛びは捨てる。3 回続けて外れたら本当に動いたとみなし、新しい値から始め直す
+- **⑤ の計算**（2026-11-20〜）: Wi-Fi のスキャンだけを使う（BLE のスキャンでは値を出さない）。**いちばん強い AP の前後1区間**の地点 x を 1m 刻みで動かし（トンネル全体を探すと、遠い AP の電波のぶれで離れた所を選ぶことがある）、AP i までの距離 `r_i = √((x − d_i)² + 3²)`（高さの差 `WIFI3_AP_HEIGHT_M = 3`）から予想 RSSI `A − 10·n·log10(r_i)` を作って、実際の RSSI との差の二乗和が最小の x を選ぶ。A（機種の出力）は x ごとに最小二乗で決めるので要らない。③ が「強い2つの AP の間に置く」のに対し、⑤ は3つの AP すべてに合う1点を探すので、2つの AP の外側にいる場合や、1つの AP の RSSI がずれた場合にも対応できる。RSSI が2つ未満なら ① と同じ。雑音のない RSSI では 30m・130m・260m を ±1m で当てることをテストで確認
+- **Wi-Fi と BLE の両方を使う方式**: ①〜④ は、両方の表に行があれば両方のスキャンを1本の時系列に混ぜる（同じ計算で）。⑥ はスキャンの種類ごとに向いた計算（BLE は ③、Wi-Fi は ⑤）を使ってから混ぜる。⑤ は Wi-Fi だけ
+- **② ④ ⑤ ⑥ の計算**: 位置のゆらぎ `SERIES_WALK_MPS = 3.0` m/s（人の速さより大きめにして遅れを減らす。1.5 だとシミュレーションで遅れが目立った）、測定のばらつき = `SOURCE_SIGMA_SPACINGS`（Wi-Fi 0.35・BLE 0.25）× AP 間隔。予測から 3σ を超え、かつ `SERIES_MAX_SPEED_MPS = 3` m/s でも届かない飛びは捨てる。3 回続けて外れたら本当に動いたとみなし、新しい値から始め直す
 - **Wi-Fi と BLE の比重**: basic は `SOURCE_WEIGHT`（今はどちらも 1.0）を重みに掛け、series は上のばらつきで自然に重み付けされる。値は `position_eval` の記録で決める
 - **古い位置を出さない**: 新しい表の装置は、最後に AP が分かったスキャンが最新のスキャンより `SCAN_STALE_SEC`（16 秒）以上古ければ位置を出さない。旧形式の装置は今まで通り（最新レポートで AP が分からなければ出さない）
 - **現地での比較**: ポップアップで正しい位置を入れて「記録」→ `position_eval` に ①〜④ と一緒に保存。「位置推定の方式」欄に方式ごとの平均誤差・90% 点が出る
@@ -371,14 +373,14 @@
 
 | セクション | 主な DOM | 描画・操作の関数 | 使う API |
 |---|---|---|---|
-| ESP32 AP（マップの真上） | `#apNodesTableBody` | `loadApNodesTable` / `saveApNode` / `deleteApNode` | `/api/ap_nodes` |
+| 位置推定の方式（マップの真上） | `#positionMethodSelect`, `#positionEvalHead`, `#positionEvalBody` | `loadPositionSettings` / `savePositionMethod` / `loadPositionEval`（方式を横に並べた3行の表）/ `clearPositionEval`。作業者ポップアップの「推定の比較」は `positionMethodsHtml` / `recordPositionEval` | `/api/position_settings`, `/api/position_eval` |
 | トンネルマップ（個別指示・区間の指示・火災も） | `canvas#tunnelMap`, `#workerPopup`, `#fireModeBtn`, `#fireClearBtn`, `#fireStatus`, 凡例 | `loadTunnelMap` / `renderTunnelMap` / `openWorkerPopup` / `openSegmentPopup` / `toggleFireMode` ほか | `/api/wifi_map`, `/api/device_instructions`, `/api/segment_instructions`, `/api/fire_location` |
 | 入場管理 | `#entryCurrentBody`, `#entryLogBody` | `loadEntryManagement` / `renderEntryCurrentTable` / `renderEntryLogTable` | `/api/entry_management`, `/api/entry_log?limit=30` |
 | ― 設定 ― | | | |
 | AP位置設定 | `#apPositionsTableBody`, `#apPresetSelect`, `#apPresetNameInput` | `loadApPositionsTable` / `saveApPositionsTable` / `loadApPreset` / `saveApPreset` / `deleteApPreset` | `/api/ap_positions`, `/api/ap_presets` |
 | エリア割当設定 | `#areaTableBody` | `loadAreaMapTable` / `saveAreaMapTable` / `removeAreaRow` | `/api/area` |
 | ユーザー設定 | `#userTableBody` | `loadUserTable` / `saveUserTable` / `removeRow` | `/api/user` |
-| 位置推定の方式（ユーザー設定の下） | `#positionMethodSelect`, `#positionEvalBody` | `loadPositionSettings` / `savePositionMethod` / `loadPositionEval` / `clearPositionEval`。作業者ポップアップの「推定の比較」は `positionMethodsHtml` / `recordPositionEval` | `/api/position_settings`, `/api/position_eval` |
+| ESP32 AP（設定の下） | `#apNodesTableBody` | `loadApNodesTable` / `saveApNode` / `deleteApNode` | `/api/ap_nodes` |
 | カメラ（トンネルマップの下。表では順番を後ろに書いている） | `#cameraGrid`, `#cameraSettingsBody` | `loadCameras` / `startCameraView` / `stopCameraView` / `fetchCameraFrame` / `saveCamera` / `deleteCamera` | `/api/cameras`, `/api/camera_frame/<id>` |
 | フッター | LOGOUT ボタン | | `/logout` |
 
@@ -564,6 +566,8 @@
 | `CLAUDE.md` | `@AGENTS.md` を読み込むだけ（Claude Code 用） |
 | `docs/AI_WORKFLOW.md` | 共同開発者向けの手順。リポジトリを読める AI とチャット AI での使い分け、指示文の例、書き換えたあとの流れ |
 | `scripts/make_ai_context.py` | AGENTS.md・この仕様書・主要ソース（14 ファイル、約 220KB）を `dist/ai_context.md` にまとめる。`--no-css` で style.css を除く。`.env` と `config.h` は入れず、`app.py` の `secret_key` の値は伏せる |
+| `scripts/demo_watch.py` | **デモ用**。ウォッチの代わりに、トンネルを歩く作業者（`demo-01`〜）のスキャン結果を `wifi_reports`・`wifi_reports_v2`・`ble_reports` に入れ続ける。AP の配置は `app.py` の関数で DB から読み、RSSI は距離減衰の式＋ばらつきで作る。`--auto-eval` で本当の位置と ①〜⑥ を `position_eval` に記録、`--cleanup` で `demo-` の行を全部消す。`api/.env` の Supabase（ふつうは本番）に書く |
+| `scripts/flash_camera.py` | ESP32 カメラをカメラごとの設定ファイルで書き込む（`firmware/esp32cam_uplink/README.md`） |
 | `scripts/build_spec_qa.py` | **仕様Q&A ページ**（`dist/spec_qa.html`、約 710KB）を作る。テンプレートは `scripts/spec_qa/template.html`。仕様書・開発ガイド・ソース 15 ファイルを埋め込み、ページから Claude に質問できる（Artifact の `sample` 機能）。毎回 AGENTS.md と SPEC.md の全文を渡し、ソースは Claude が「検索」「行範囲を読む」の道具で必要な所だけ読む。秘密の値は伏せる。公開先: https://claude.ai/artifact/NhhfAQbG1vPLCMjxxLzQC9（仕様やコードを変えたら作り直して同じ URL に公開し直す） |
 
 ---
@@ -614,6 +618,7 @@
 | 2026-10-11 | #25 | マップから個別指示、位置推定の一本化と平滑化、UI 改善、火災位置の通知、ログイン画面、仕様書・CodeQL 指摘の修正 |
 | 2026-11-11 | #26 | AP を 100m 間隔に修正、`ApMap`、ESP32-S3 AP（heartbeat・管理画面・ファームウェア）、AGENTS.md ほか開発支援。**本番デプロイは失敗中** |
 | 2026-11-18 | #28〜#30 | ESP32 カメラ（外から見るコマ送り、RGB565→JPEG 変換）、カメラが位置の目印を兼ね距離を ESP32 AP 表と連動 |
+| 2026-11-20 | — | 位置推定の欄をマップの真上、ESP32 AP 欄を設定の下へ。位置推定 ⑥（Wi-Fi と BLE を合わせる）、⑤ の探す範囲を前後1区間に、`SERIES_WALK_MPS` 3.0。デモ用 `scripts/demo_watch.py` |
 | 2026-11-20 | — | エリアカードを削除し、AP の区間ごとの指示（個別指示として送る）に。マップの点線を AP の区間に。ESP32 AP 欄をマップの真上に（1366×768 でスクロールせずに両方見える）。位置推定 ⑤（Wi-Fi だけ・上位3つの当てはめ） |
 | 2026-11-19 | — | ウォッチのスキャンを RSSI 上位3つで `wifi_reports_v2` / `ble_reports` に。位置推定を ①〜④ の4方式にし、画面で切り替え・現地で比較記録 |
 | 2026-11-18 | — | ESP32 の位置の目印を BLE ビーコンに（`esp32s3_ap` 2.0.0、カメラ 1.4.0）。ウォッチは BLE 優先・無ければ Wi-Fi（`docs/WATCH_SCAN_REPORTS.md`） |
