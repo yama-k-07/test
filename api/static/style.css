@@ -1057,3 +1057,72 @@ input[type="checkbox"]:checked {
 .worker-popup-eval .input {
   width: 80px;
 }
+
+/* ESP32 AP 欄（マップの真上）とマップ: 1366x768 の画面でスクロールせずに両方見えるよう詰める。
+   ESP32 AP の表は約3行分の高さで、それ以上は表の中だけスクロール */
+.box-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 14px;
+  margin-bottom: 8px;
+}
+.box-head .subtitle {
+  margin-bottom: 0 !important;
+}
+.box-head .section-hint {
+  margin: 0;
+}
+.box-head .fire-controls {
+  margin-bottom: 0;
+}
+.ap-nodes-box {
+  padding-top: 10px;
+  padding-bottom: 10px;
+  margin-bottom: 12px !important;
+}
+.ap-nodes-scroll {
+  max-height: 136px;
+  overflow-y: auto;
+  margin-bottom: 0 !important;
+}
+.ap-nodes-scroll .table {
+  font-size: 13px;
+}
+.ap-nodes-scroll .table td,
+.ap-nodes-scroll .table th {
+  padding-top: 2px;
+  padding-bottom: 2px;
+  vertical-align: middle;
+}
+.ap-nodes-scroll .input,
+.ap-nodes-scroll select {
+  /* 全体の入力欄（padding 8px・min-height 2.5em、!important）をこの表だけ低くする */
+  min-height: 0;
+  padding-top: 3px !important;
+  padding-bottom: 3px !important;
+  font-size: 13px;
+}
+.ap-nodes-scroll .button {
+  font-size: 12px;
+}
+.ap-nodes-scroll .entry-badge {
+  font-size: 12px;
+}
+.ap-nodes-scroll thead th {
+  position: sticky;
+  top: 0;
+  background: #fff;
+  z-index: 1;
+}
+.ap-nodes-box + .box {
+  padding-top: 12px;
+}
+
+/* マップの AP の区間（凡例） */
+.legend-seg {
+  font-size: 12px;
+  color: #8a5300;
+  border: 1px dashed rgba(25, 76, 34, 0.5);
+  padding: 0 4px;
+}

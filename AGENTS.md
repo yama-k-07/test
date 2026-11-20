@@ -58,7 +58,8 @@ ESP32-S3 ビーコン（BLE）──heartbeat──> /api/ap_heartbeat ──> S
 |---|---|
 | セクションの並び・見出し・説明文を変える | `index.html`（`<section class="box">` 単位） |
 | 新しいセクションを足す | `index.html` に器（`id` 付き）→ `admin.js` に `loadXxx()` を作り、`DOMContentLoaded` と `setInterval` の両方に登録（§4 の更新パターン） |
-| エリアカードの見た目・項目 | `admin.js` の `createAreaCard`、色は `style.css` の `.areacard[data-instruction=...]` |
+| AP の区間ごとの指示（マップの点線の間を押す） | `admin.js` の `findSegmentAt` / `openSegmentPopup` / `saveSegmentInstruction`、区間の描画は `renderTunnelMap`。サーバーは `app.py` の `ap_segments` / `apply_segment_instructions` / `handle_segment_instructions`（区間に入った人へ送る決まりはここ） |
+| ESP32 AP 欄とマップを1画面に収める | `index.html` の並び（ESP32 AP 欄がマップの真上）、`style.css` の `.ap-nodes-box` / `.ap-nodes-scroll`（表の高さ）/ `.box-head` |
 | エリア指示の選択肢・表示名 | `admin.js` の `AREA_INSTRUCTION_LABELS` と `instructionOptions`（値を変える場合はウォッチと要相談） |
 | トンネルマップの描き方（色・大きさ・ラベル） | `admin.js` の `renderTunnelMap`（`const H`・色定数 `C_*` もここ）。高さを変えたら `style.css` の `#tunnelMap` の `height` も同じ値に |
 | 作業者アイコンのクリック・ポップアップ | `admin.js` の `initTunnelMapInteraction` / `findWorkerAt` / `openWorkerPopup` |
@@ -77,8 +78,8 @@ ESP32-S3 ビーコン（BLE）──heartbeat──> /api/ap_heartbeat ──> S
 
 | やりたいこと | 編集する場所 |
 |---|---|
-| 位置推定の計算を変える | `estimate_positions`（全体の流れ）、`estimate_methods`（①〜④）、`scan_top2_m` / `scan_rssi_m`（1回分の距離、`MAC01_WEIGHT` / `PATH_LOSS_N`）、`smooth_distance_m`（今までの平滑化）、`series_distance_m`（カルマン、`SERIES_*`）、Wi-Fi と BLE の比重 `SOURCE_WEIGHT` / `SOURCE_SIGMA_SPACINGS`、定数 `SMOOTHING_*` / `OUTLIER_SPACINGS` |
-| 位置推定の方式を足す・名前を変える | `app.py` の `POSITION_METHODS`、`admin.js` の `POSITION_METHOD_SHORT`、`supabase/scan_reports.sql` の `position_eval` の列 |
+| 位置推定の計算を変える | `estimate_positions`（全体の流れ）、`estimate_methods`（①〜④）、`scan_top2_m` / `scan_rssi_m` / `scan_wifi3_m`（1回分の距離、`MAC01_WEIGHT` / `PATH_LOSS_N` / `WIFI3_*`）、`smooth_distance_m`（今までの平滑化）、`series_distance_m`（カルマン、`SERIES_*`）、Wi-Fi と BLE の比重 `SOURCE_WEIGHT` / `SOURCE_SIGMA_SPACINGS`、定数 `SMOOTHING_*` / `OUTLIER_SPACINGS` |
+| 位置推定の方式を足す・名前を変える | `app.py` の `POSITION_METHODS`（1回分の求め方は `SCAN_ESTIMATORS`、basic / series の組み合わせは `SCAN_ESTIMATOR_MODES`）、`admin.js` の `POSITION_METHOD_SHORT`、`position_eval` の列（`supabase/scan_reports.sql`、追加分は `ALTER TABLE`） |
 | AP の距離・台数を変える | 既設6台: `AP_LABELS` / `AP_DISTANCES_M`（`admin.js` の同名定数も）。ESP32 AP: 画面の「ESP32 AP」表で設定（コード変更不要） |
 | AP の距離の出どころ・トンネルの両端・間隔 | `class ApMap` と `load_ap_map` |
 | エリアの決め方 | `build_area_layout` / `area_for_ratio` / `area_centers_m`、`estimate_positions` 内の優先順位 |
@@ -109,7 +110,8 @@ ESP32-S3 ビーコン（BLE）──heartbeat──> /api/ap_heartbeat ──> S
   - テーブル `wifi_reports` / `wifi_reports_v2` / `ble_reports` / `latest_wifi_reports` / `area_status_v2` / `device_instructions` / `device_fire_alerts`
   - `device_fire_alerts.direction` の値 `inward / outward / near / unknown`
   - ログイン不要の API（`/api/area_status`、`/api/user`、`/api/area`、`/api/area_order`、`/api/entry_status`）
-- 位置推定は `estimate_positions` に**一本化**されている（マップもエリアボードも同じ結果）。別の計算を足さない。
+- 位置推定は `estimate_positions` に**一本化**されている（マップ・区間の指示・入退場・火災通知が同じ結果を使う）。別の計算を足さない。
+- 区間の指示は `device_instructions`（個別指示）としてウォッチに送る。区間のために新しい指示の値や、ウォッチが読む新しい表を作らない（ウォッチとの約束を変えないため）。
 - `MAC01_WEIGHT = 0.8` は「mac01 が最も強い AP／ビーコン」というウォッチの仕様が前提。BLE の名前の頭 `MAMOTCHI-` と、`wifi_reports_v2` / `ble_reports` の列（`scanned_at`、`mac01`/`rssi01`〜`mac03`/`rssi03`）もウォッチとの約束（`docs/WATCH_SCAN_REPORTS.md`）。
 - 位置推定の方式は ①〜④ の4つで、すべて `estimate_positions` の中（`estimate_methods`）で計算する。画面に使うのは `position_settings` で選んだ1つ。新しい方式を足すときも `POSITION_METHODS` に足し、`estimate_positions` の外に別の計算を作らない。
 - AP の距離と表示名は `app.py` と `admin.js` の**両方**にある（`AP_LABELS` / `AP_DISTANCES_M` ↔ `AP_LABELS` / `AP_POSITION_DISTANCES_M`）。片方だけ変えない。同様に指示の値（`DEVICE_INSTRUCTIONS` ↔ `DEVICE_INSTRUCTION_LABELS`）。

@@ -3,7 +3,6 @@ let isSorting = false;
 let lastWifiMapData = null;
 
 // ちらつき防止用: 前回取得データとの差分がない場合は再描画をスキップする
-let lastAreaBoardSig = null;
 let lastAreaMapSig = null;
 let lastUserListSig = null;
 let lastEntryStatusSig = null;
@@ -18,161 +17,7 @@ document.addEventListener('focusout', () => {
   isEditing = false;
 });
 
-// ===== データロード =====
-async function loadAreaBoard() {
-  if (isEditing) return;
-
-  let areas, entries, order;
-  try {
-    const [areasRes, entriesRes, orderRes] = await Promise.all([
-      fetch('/api/area_status'),
-      fetch('/api/entry_status'),
-      fetch('/api/area_order')
-    ]);
-    if (!areasRes.ok || !entriesRes.ok || !orderRes.ok) {
-      console.error('loadAreaBoard: APIエラー', areasRes.status, entriesRes.status, orderRes.status);
-      return;
-    }
-    [areas, entries, order] = await Promise.all([areasRes.json(), entriesRes.json(), orderRes.json()]);
-  } catch (e) {
-    console.error('loadAreaBoard fetch error:', e);
-    return;
-  }
-
-  if (!Array.isArray(areas) || !Array.isArray(entries) || !Array.isArray(order)) {
-    console.error('loadAreaBoard: 想定外のレスポンス形式', { areas, entries, order });
-    return;
-  }
-
-  const sig = JSON.stringify({ areas, entries, order });
-  if (sig === lastAreaBoardSig) return;
-  lastAreaBoardSig = sig;
-
-  const board = document.getElementById("areaBoard");
-  board.innerHTML = "";
-
-  // entry を area_id ごとにまとめる
-  const entryMap = {};
-  entries.forEach(e => {
-    if (!entryMap[e.area_id]) entryMap[e.area_id] = [];
-    entryMap[e.area_id].push(e.username || e.device_id);
-  });
-
-  // 並び順を決定（order にないエリアは末尾）
-  const orderedIds = [...order];
-  areas.forEach(a => {
-    if (!orderedIds.includes(a.area_id)) orderedIds.push(a.area_id);
-  });
-
-  orderedIds.forEach(id => {
-    const area = areas.find(a => a.area_id === id);
-    if (!area) return;
-    const card = createAreaCard(area, entryMap[id] || []);
-    board.appendChild(card);
-  });
-
-  enableSortable();
-  refreshAlertStyles();
-}
-
-async function saveAreaState(areaId, instruction, fire) {
-  await fetch('/api/area_status', {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify([
-      { area_id: areaId, instruction, fire }
-    ])
-  });
-  isEditing = false;
-}
-
-
-// ===== エリアカード生成 =====
-function createAreaCard(area, users) {
-  const col = document.createElement("div");
-  col.className = "area-card";
-
-  col.dataset.areaId = area.area_id;
-
-  const userList = users.length
-    ? users.map(u => `<li>${escapeHtml(u)}</li>`).join("")
-    : `<li class="entry-list-empty">なし</li>`;
-
-  col.innerHTML = `
-    <div class="box areacard" data-instruction="${escapeHtml(area.instruction || 'none')}">
-      <h2>${escapeHtml(area.area_id)}</h2>
-      <p class="area-fire-banner">火災通報あり</p>
-
-      <div class="field">
-        <label class="label">指示</label>
-        <div class="control">
-          <select class="select instruction">
-            ${instructionOptions(area.instruction)}
-          </select>
-        </div>
-      </div>
-
-      <div class="field">
-        <label class="checkbox">
-          <input type="checkbox" class="fire" ${area.fire ? "checked" : ""}>
-          火災通報
-        </label>
-      </div>
-
-      <div class="content area-entries">
-        <p class="area-entries-title">入場者 <span class="area-entries-count">${users.length}</span></p>
-        <ul class="entry-list">${userList}</ul>
-      </div>
-    </div>
-  `;
-  const cardEl = col.querySelector(".areacard");
-  const instructionEl = col.querySelector(".instruction");
-  const fireEl = col.querySelector(".fire");
-
-  const save = () => {
-    cardEl.dataset.instruction = instructionEl.value;
-    isEditing = true;
-    saveAreaState(
-      area.area_id,
-      instructionEl.value,
-      fireEl.checked
-    );
-  };
-
-  instructionEl.addEventListener("change", save);
-  fireEl.addEventListener("change", save);
-
-  return col;
-}
-
-
-
-// ===== 指示セレクトHTML =====
-// 値（DB・デバイスに送る値）はそのまま、表示だけ日本語にする
-const AREA_INSTRUCTION_LABELS = {
-  none: "指示なし",
-  waiting: "待機",
-  evacuate_exit: "出口へ避難",
-  evacuate_upwind: "風上へ避難",
-  alert: "警戒",
-};
-
-function instructionOptions(current) {
-  const list = ["none", "waiting", "evacuate_exit", "evacuate_upwind", "alert"];
-  return list.map(v =>
-    `<option value="${v}" ${v === current ? "selected" : ""}>${AREA_INSTRUCTION_LABELS[v]}</option>`
-  ).join("");
-}
-
-// ===== 指示保存 =====
-async function saveInstruction(areaId, instruction) {
-  await fetch('/api/area_status', {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify([{ area_id: areaId, instruction, fire: false }])
-  });
-  isEditing = false;
-}
+// 「エリアごとの状態」のカードは 2026-11-20 に削除（AP の区間ごとの指示に置き換え。renderTunnelMap / openSegmentPopup）
 
 // ======== デバイス指示（トンネルマップのアイコンから送る） ========
 const DEVICE_INSTRUCTION_LABELS = [
@@ -188,6 +33,9 @@ let deviceInstructionMap = {};
 let tunnelMapHitboxes = [];
 // ポップアップを開いているデバイス
 let popupDeviceId = null;
+// ポップアップを開いている AP の区間（segment_key）と、直近の描画での区間の位置
+let popupSegmentKey = null;
+let tunnelSegments = [];
 
 function escapeHtml(s) {
   return String(s ?? '').replace(/[&<>"']/g, c => (
@@ -293,9 +141,85 @@ function closeWorkerPopup() {
     popup.hidden = true;
     popup.innerHTML = '';
   }
-  if (popupDeviceId === null) return;
+  if (popupDeviceId === null && popupSegmentKey === null) return;
   popupDeviceId = null;
+  popupSegmentKey = null;
   if (lastWifiMapData) renderTunnelMap(lastWifiMapData);
+}
+
+// ======== AP の区間ごとの指示 ========
+// マップの (x, y) にある区間（トンネルの中か、上のラベルの行）
+function findSegmentAt(x, y) {
+  if (!tunnelGeom) return null;
+  const { tY, tH } = tunnelGeom;
+  if (y < tY - 26 || y > tY + tH) return null;
+  return tunnelSegments.find(seg => x >= seg.x0 && x < seg.x1) || null;
+}
+
+function openSegmentPopup(seg, x, y) {
+  const popup = document.getElementById('workerPopup');
+  if (!popup) return;
+  popupDeviceId = null;
+  popupSegmentKey = seg.key;
+  if (lastWifiMapData) renderTunnelMap(lastWifiMapData);
+  const current = seg.instruction || 'none';
+  const names = (lastWifiMapData?.workers || [])
+    .filter(w => (seg.device_ids || []).includes(w.device_id))
+    .map(w => w.username || w.device_id);
+  popup.innerHTML = `
+    <div class="worker-popup-head">
+      <strong>${Math.round(seg.start_m)}〜${Math.round(seg.end_m)}m の区間</strong>
+      <button type="button" class="delete is-small worker-popup-close" aria-label="閉じる"></button>
+    </div>
+    <p class="worker-popup-current">区間の指示: ${deviceInstructionLabel(current)}</p>
+    <p class="worker-popup-current">いる人: ${names.length ? escapeHtml(names.join('、')) : 'いません'}</p>
+    <div class="buttons are-small worker-popup-buttons">
+      ${DEVICE_INSTRUCTION_LABELS.map(o => `
+        <button type="button" class="button ${o.value === current ? 'is-link' : ''}" data-seg-instruction="${o.value}">${o.label}</button>
+      `).join('')}
+    </div>
+    <p class="section-hint">今いる人全員と、あとからこの区間に入った人に届きます。</p>
+  `;
+  popup.querySelector('.worker-popup-close').addEventListener('click', closeWorkerPopup);
+  popup.querySelectorAll('[data-seg-instruction]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      popup.querySelectorAll('[data-seg-instruction]').forEach(b => { b.disabled = true; });
+      const ok = await saveSegmentInstruction(seg.key, btn.dataset.segInstruction);
+      if (ok) {
+        closeWorkerPopup();
+        loadTunnelMap();
+      } else {
+        popup.querySelectorAll('[data-seg-instruction]').forEach(b => { b.disabled = false; });
+      }
+    });
+  });
+  popup.hidden = false;
+  const wrap = popup.parentElement;
+  const maxLeft = wrap.clientWidth - popup.offsetWidth - 4;
+  popup.style.left = `${Math.max(4, Math.min(maxLeft, x + 8))}px`;
+  popup.style.top = `${Math.max(4, y - popup.offsetHeight / 2)}px`;
+}
+
+async function saveSegmentInstruction(segmentKey, instruction) {
+  try {
+    const res = await fetch('/api/segment_instructions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ segment_key: segmentKey, instruction })
+    });
+    if (!res.ok) {
+      const b = await res.json().catch(() => ({}));
+      alert('区間の指示を出せませんでした: ' + (b.error || res.status));
+      return false;
+    }
+    return true;
+  } catch (e) {
+    console.error('saveSegmentInstruction error:', e);
+    alert('区間の指示を出せませんでした');
+    return false;
+  } finally {
+    isEditing = false;
+  }
 }
 
 // ======== 位置推定の方式（①〜④）と現地での比較 ========
@@ -304,6 +228,7 @@ const POSITION_METHOD_SHORT = {
   top2_series: '② 上位2つ＋時系列',
   rssi_basic: '③ RSSI',
   rssi_series: '④ RSSI＋時系列',
+  wifi3_series: '⑤ Wi-Fi 3点',
 };
 const POSITION_SOURCE_LABELS = { wifi: 'Wi-Fi', ble: 'BLE', wifi_legacy: 'Wi-Fi（旧形式・RSSI なし）' };
 
@@ -461,7 +386,12 @@ function initTunnelMapInteraction() {
       return;
     }
     const hit = findWorkerAt(x, y);
-    if (hit) openWorkerPopup(hit);
+    if (hit) {
+      openWorkerPopup(hit);
+      return;
+    }
+    const seg = findSegmentAt(x, y);
+    if (seg) openSegmentPopup(seg, x, y);
     else closeWorkerPopup();
   });
 
@@ -474,7 +404,8 @@ function initTunnelMapInteraction() {
       if (lastWifiMapData) renderTunnelMap(lastWifiMapData);
       return;
     }
-    canvas.style.cursor = findWorkerAt(x, e.clientY - rect.top) ? 'pointer' : 'default';
+    const y = e.clientY - rect.top;
+    canvas.style.cursor = (findWorkerAt(x, y) || findSegmentAt(x, y)) ? 'pointer' : 'default';
   });
 
   canvas.addEventListener('mouseleave', () => {
@@ -484,7 +415,7 @@ function initTunnelMapInteraction() {
   });
 
   document.addEventListener('click', e => {
-    if (!popupDeviceId) return;
+    if (!popupDeviceId && !popupSegmentKey) return;
     const popup = document.getElementById('workerPopup');
     if (popup && !popup.contains(e.target)) closeWorkerPopup();
   });
@@ -648,46 +579,6 @@ function drawFireMarker(ctx, x, tY, tH, label, preview) {
   }
   ctx.restore();
 }
-
-
-// ===== 並び替え =====
-function enableSortable() {
-  const board = document.getElementById("areaBoard");
-  if (board._sortable) return;
-
-  board._sortable = Sortable.create(board, {
-    animation: 150,
-    onStart: () => {
-      isEditing = true;
-      isSorting = true;
-    },
-    onEnd: async () => {
-      await saveAreaOrder();
-      isSorting = false;
-      isEditing = false;
-    }
-  });
-}
-
-
-
-// ===== 並び順保存 =====
-async function saveAreaOrder() {
-  const order = Array.from(
-    new Set(
-      Array.from(document.querySelectorAll(".area-card"))
-        .map(e => e.dataset.areaId)
-    )
-  );
-
-  await fetch('/api/area_order', {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(order)
-  });
-}
-
-
 
 
 // ======== USER管理 ========
@@ -1087,7 +978,6 @@ function removeRow(button) {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-  loadAreaBoard();
   loadAreaMapTable();
   loadUserTable();
   loadTunnelMap();
@@ -1103,7 +993,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
   setInterval(() => {
     if (isEditing) return;
-    loadAreaBoard();
     loadAreaMapTable();
     loadUserTable();
     loadEntryManagement();
@@ -1218,27 +1107,41 @@ function renderTunnelMap(data) {
   ctx.lineWidth = 3;
   ctx.strokeRect(tX, tY, tW, tH);
 
-  // エリア区間（サーバーの area_layout。古いサーバー応答なら等分）
-  const layout = Array.isArray(data.area_layout) && data.area_layout.length
-    ? data.area_layout
-    : area_order.map((a, i) => ({ area_id: a, start: i / area_order.length, end: (i + 1) / area_order.length }));
-  ctx.font = FONT;
-  layout.forEach((seg, i) => {
+  // AP の区間（サーバーの segments。隣り合う AP の間）。境目に点線、上に「0〜100m」と区間の指示。
+  // 区間を押すとまとめて指示を出せる（openSegmentPopup）
+  const segments = Array.isArray(data.segments) ? data.segments : [];
+  segments.forEach((seg, i) => {
+    const x0 = tX + tW * seg.start;
+    const x1 = tX + tW * seg.end;
+    const active = seg.instruction && seg.instruction !== 'none';
+    if (active || seg.key === popupSegmentKey) {
+      ctx.fillStyle = seg.key === popupSegmentKey ? 'rgba(32, 124, 229, 0.16)' : 'rgba(255, 196, 0, 0.16)';
+      ctx.fillRect(x0, tY, x1 - x0, tH);
+    }
     if (i > 0) {
-      const x = tX + tW * seg.start;
       ctx.strokeStyle = C_DIV;
       ctx.lineWidth = 1;
       ctx.setLineDash([4, 4]);
       ctx.beginPath();
-      ctx.moveTo(x, tY);
-      ctx.lineTo(x, tY + tH);
+      ctx.moveTo(x0, tY);
+      ctx.lineTo(x0, tY + tH);
       ctx.stroke();
       ctx.setLineDash([]);
     }
-    ctx.fillStyle = C_TEXT;
+    // 上のラベル: 入る幅なら「0〜100m 待て」、狭ければ指示だけ（それも入らなければ出さない）
+    ctx.font = FONT_SM;
     ctx.textAlign = 'center';
-    ctx.fillText(seg.area_id, tX + tW * (seg.start + seg.end) / 2, tY - 12);
+    const range = `${Math.round(seg.start_m)}〜${Math.round(seg.end_m)}m`;
+    const instr = active ? deviceInstructionLabel(seg.instruction) : '';
+    const full = instr ? `${range} ${instr}` : range;
+    const room = x1 - x0 - 4;
+    const text = ctx.measureText(full).width <= room ? full : (instr && ctx.measureText(instr).width <= room ? instr : '');
+    if (text) {
+      ctx.fillStyle = active ? '#8a5300' : C_TEXT;
+      ctx.fillText(text, (x0 + x1) / 2, tY - 12);
+    }
   });
+  tunnelSegments = segments.map(seg => ({ ...seg, x0: tX + tW * seg.start, x1: tX + tW * seg.end }));
 
   // APマーカー（トンネル下端）。実距離の位置に置く（サーバーの ap_markers。古い応答なら等間隔）
   const markers = Array.isArray(data.ap_markers) && data.ap_markers.length
