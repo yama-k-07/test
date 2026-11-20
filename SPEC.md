@@ -106,7 +106,7 @@
 | `api/ANALYSIS.md` | | 古い | 2026-08 時点の解析。**この仕様書が正** |
 | `api/properioai/` | | 不要 | コミットされた Python の venv（1300 ファイル超） |
 
-ブラウザが読む外部ライブラリ（CDN）: Bulma 0.9.4、SortableJS 1.15.0、`@supabase/supabase-js@2`（UMD）、Google Fonts DotGothic16。
+ブラウザが読む外部ライブラリ（CDN）: Bulma 0.9.4、`@supabase/supabase-js@2`（UMD）、Google Fonts DotGothic16。
 
 ---
 
@@ -132,6 +132,8 @@
 | `TABLE_BLE_SCAN` | `ble_reports` | `id` | 同上（`MAMOTCHI-` の BLE ビーコンだけ） | ウォッチ | Flask（位置推定） |
 | `TABLE_POSITION_SETTINGS` | `position_settings` | `id`（=1） | `method`（`top2_basic` / `top2_series` / `rssi_basic` / `rssi_series`）, `updated_at` | Flask | Flask |
 | `TABLE_POSITION_EVAL` | `position_eval` | `id` | `device_id`, `true_distance_m`, `method_selected`, `sources`, `top2_basic`, `top2_series`, `rssi_basic`, `rssi_series`, `note`, `created_at` | Flask | Flask |
+| `TABLE_SEGMENT_INSTRUCTIONS` | `segment_instructions` | `segment_key`（例 `0-100`） | `start_m`, `end_m`, `instruction`（`none/wait/inward/outward`）, `updated_at` | Flask | Flask |
+| `TABLE_DEVICE_SEGMENT_STATE` | `device_segment_state` | `device_id` | `segment_key`（最後にいた区間）, `segment_updated_at`（送った区間の指示の時刻）, `updated_at` | Flask | Flask |
 | `TABLE_CAMERAS` | `cameras` | `camera_id` | `label`, `distance_m`, `enabled`, `ap_mac`（兼ねている AP の BSSID）, `fw`, `wifi_rssi`, `width`, `height`, `frame_bytes`, `last_seen`, `last_frame_at`, `watch_until`, `created_at` | ESP32 カメラ ＋ Flask | Flask |
 
 - `area_status_v2` は「エリアと BSSID の対応」「エリアの指示・火災フラグ」「並び順」の3役を1テーブルで兼ね、3つの API（`/api/area`、`/api/area_status`、`/api/area_order`）がそれぞれ別の列を部分 upsert する。
@@ -218,6 +220,8 @@
 | `GET /api/cameras` | 🔒 | 全カメラ＋`online`（60 秒以内に連絡）＋`watching`。`ap_mac` が `ap_nodes` にあるカメラは `distance_m` を **ap_nodes の距離で返し**、`distance_source: 'ap'`・`ap_label` を付ける |
 | `POST /api/cameras` | 🔒 | `{camera_id, label?, distance_m?, enabled?}`。AP を兼ねるカメラの `distance_m` は `ap_nodes` にも書く（距離は1つに揃う） |
 | `DELETE /api/cameras` | 🔒 | `{camera_id}` |
+| `GET /api/segment_instructions` | 🔒 | AP の区間 `[{key, start_m, end_m, start, end, instruction, device_ids}]` |
+| `POST /api/segment_instructions` | 🔒 | `{segment_key, instruction}`。区間に指示を出し、今その区間にいるウォッチ全員に `device_instructions` で送る。応答に `sent_device_ids` |
 | `GET /api/position_settings` | 🔒 | `{method, methods: [{key, label}], path_loss_n, source_weight}` |
 | `POST /api/position_settings` | 🔒 | `{method}`（①〜④ のどれか）。マップ・エリア・火災通知に使う方式を変える |
 | `GET /api/position_eval` | 🔒 | 方式ごとの誤差のまとめ `summary: [{key, label, count, mean_abs_m, p90_abs_m}]` と直近 20 件 `recent` |
@@ -252,7 +256,7 @@
 - 外れ値の閾値は `OUTLIER_SPACINGS`（1.5）× 間隔、火災の「すぐ近く」は `FIRE_NEAR_SPACINGS`（0.5）× 間隔。AP を増やして間隔を詰めれば、閾値も自動で細かくなる。
 
 ### 6.3 位置推定 `estimate_positions()`
-トンネルマップとエリアボードは**同じ関数**の結果を使う。
+トンネルマップ・入退場のエリア・火災通知は**同じ関数**の結果を使う。
 
 **方式は4つ**（2026-11-19〜）。全部を同時に計算し（`estimate_methods`）、画面・エリア・火災通知に使うのは「位置推定の方式」欄で選んだ1つ（`position_settings.method`、既定 `top2_basic` ＝ 今までと同じ）。作業者ポップアップの「推定の比較」で4つとも見られる。
 
@@ -262,9 +266,11 @@
 | ② `top2_series` | `scan_top2_m` | `series_distance_m`: 1次元カルマンフィルタ（60 秒・60 回まで） |
 | ③ `rssi_basic` | `scan_rssi_m`: RSSI の差で強い2つの AP の間に置く | `smooth_distance_m` |
 | ④ `rssi_series` | `scan_rssi_m` | `series_distance_m` |
+| ⑤ `wifi3_series` | `scan_wifi3_m`: **Wi-Fi だけ**、上位3つの RSSI に距離減衰の式を当てはめる | `series_distance_m` |
 
 - **使うスキャン**（`load_recent_scans`）: 新しい表 `wifi_reports_v2` / `ble_reports`（RSSI 上位3つ）に行がある装置はそれだけを使い、無い装置は旧 `wifi_reports`（RSSI なし。① = ③、② = ④ になる）。装置の一覧は旧 `wifi_reports` の最新行のまま（移行中はウォッチが両方に送る。`docs/WATCH_SCAN_REPORTS.md`）。
 - **③ の計算**: 強い AP を a、次の AP を b とし、距離減衰 `RSSI = P0 − 10·n·log10(r)` から `RSSI_a − RSSI_b = 10·n·log10(r_b / r_a)`、`r_a + r_b = |d_a − d_b|` を解いて `d_a` から `r_a` だけ b 側に置く。`PATH_LOSS_N = 2.0`（仮置き、現地の記録で決める）。差を使うので機種ごとの出力の違いは打ち消し合う。例: 100m が -60dBm・200m が -70dBm → 約 124m。RSSI が無いスキャンは ① と同じ
+- **⑤ の計算**（2026-11-20〜）: Wi-Fi のスキャンだけを使う（BLE のスキャンでは値を出さない）。トンネル上の地点 x を 1m 刻みで動かし、AP i までの距離 `r_i = √((x − d_i)² + 3²)`（高さの差 `WIFI3_AP_HEIGHT_M = 3`）から予想 RSSI `A − 10·n·log10(r_i)` を作って、実際の RSSI との差の二乗和が最小の x を選ぶ。A（機種の出力）は x ごとに最小二乗で決めるので要らない。③ が「強い2つの AP の間に置く」のに対し、⑤ は3つの AP すべてに合う1点を探すので、2つの AP の外側にいる場合や、1つの AP の RSSI がずれた場合にも対応できる。RSSI が2つ未満なら ① と同じ。雑音のない RSSI では 30m・130m・260m を ±1m で当てることをテストで確認
 - **② ④ の計算**: 位置のゆらぎ `SERIES_WALK_MPS = 1.5` m/s、測定のばらつき = `SOURCE_SIGMA_SPACINGS`（Wi-Fi 0.35・BLE 0.25）× AP 間隔。予測から 3σ を超え、かつ `SERIES_MAX_SPEED_MPS = 3` m/s でも届かない飛びは捨てる。3 回続けて外れたら本当に動いたとみなし、新しい値から始め直す
 - **Wi-Fi と BLE の比重**: basic は `SOURCE_WEIGHT`（今はどちらも 1.0）を重みに掛け、series は上のばらつきで自然に重み付けされる。値は `position_eval` の記録で決める
 - **古い位置を出さない**: 新しい表の装置は、最後に AP が分かったスキャンが最新のスキャンより `SCAN_STALE_SEC`（16 秒）以上古ければ位置を出さない。旧形式の装置は今まで通り（最新レポートで AP が分からなければ出さない）
@@ -365,30 +371,30 @@
 
 | セクション | 主な DOM | 描画・操作の関数 | 使う API |
 |---|---|---|---|
-| トンネルマップ（指示・火災も） | `canvas#tunnelMap`, `#workerPopup`, `#fireModeBtn`, `#fireClearBtn`, `#fireStatus`, 凡例 | `loadTunnelMap` / `renderTunnelMap` / `openWorkerPopup` / `toggleFireMode` ほか | `/api/wifi_map`, `/api/device_instructions`, `/api/fire_location` |
-| エリアごとの状態 | `#areaBoard` | `loadAreaBoard` / `createAreaCard` / `enableSortable` | `/api/area_status`, `/api/entry_status`, `/api/area_order` |
+| ESP32 AP（マップの真上） | `#apNodesTableBody` | `loadApNodesTable` / `saveApNode` / `deleteApNode` | `/api/ap_nodes` |
+| トンネルマップ（個別指示・区間の指示・火災も） | `canvas#tunnelMap`, `#workerPopup`, `#fireModeBtn`, `#fireClearBtn`, `#fireStatus`, 凡例 | `loadTunnelMap` / `renderTunnelMap` / `openWorkerPopup` / `openSegmentPopup` / `toggleFireMode` ほか | `/api/wifi_map`, `/api/device_instructions`, `/api/segment_instructions`, `/api/fire_location` |
 | 入場管理 | `#entryCurrentBody`, `#entryLogBody` | `loadEntryManagement` / `renderEntryCurrentTable` / `renderEntryLogTable` | `/api/entry_management`, `/api/entry_log?limit=30` |
 | ― 設定 ― | | | |
 | AP位置設定 | `#apPositionsTableBody`, `#apPresetSelect`, `#apPresetNameInput` | `loadApPositionsTable` / `saveApPositionsTable` / `loadApPreset` / `saveApPreset` / `deleteApPreset` | `/api/ap_positions`, `/api/ap_presets` |
 | エリア割当設定 | `#areaTableBody` | `loadAreaMapTable` / `saveAreaMapTable` / `removeAreaRow` | `/api/area` |
 | ユーザー設定 | `#userTableBody` | `loadUserTable` / `saveUserTable` / `removeRow` | `/api/user` |
-| ESP32 AP | `#apNodesTableBody` | `loadApNodesTable` / `saveApNode` / `deleteApNode` | `/api/ap_nodes` |
-| 位置推定の方式（ESP32 AP の下） | `#positionMethodSelect`, `#positionEvalBody` | `loadPositionSettings` / `savePositionMethod` / `loadPositionEval` / `clearPositionEval`。作業者ポップアップの「推定の比較」は `positionMethodsHtml` / `recordPositionEval` | `/api/position_settings`, `/api/position_eval` |
-| カメラ（トンネルマップの下） | `#cameraGrid`, `#cameraSettingsBody` | `loadCameras` / `startCameraView` / `stopCameraView` / `fetchCameraFrame` / `saveCamera` / `deleteCamera` | `/api/cameras`, `/api/camera_frame/<id>` |
+| 位置推定の方式（ユーザー設定の下） | `#positionMethodSelect`, `#positionEvalBody` | `loadPositionSettings` / `savePositionMethod` / `loadPositionEval` / `clearPositionEval`。作業者ポップアップの「推定の比較」は `positionMethodsHtml` / `recordPositionEval` | `/api/position_settings`, `/api/position_eval` |
+| カメラ（トンネルマップの下。表では順番を後ろに書いている） | `#cameraGrid`, `#cameraSettingsBody` | `loadCameras` / `startCameraView` / `stopCameraView` / `fetchCameraFrame` / `saveCamera` / `deleteCamera` | `/api/cameras`, `/api/camera_frame/<id>` |
 | フッター | LOGOUT ボタン | | `/logout` |
 
 ### 7.2 更新の仕組み
 - **読み込み時**（`DOMContentLoaded`）に全セクションを1回読む。トンネルマップのクリック操作と Realtime 購読もここで始める。
-- **5 秒ごと**（`setInterval`）に `loadAreaBoard`、`loadAreaMapTable`、`loadUserTable`、`loadEntryManagement`、`loadApNodesTable`、`loadCameras`、`loadPositionSettings`、`loadPositionEval`、`loadTunnelMap` を呼ぶ。AP位置設定とプリセット一覧は読み込み時だけ。
+- 「エリアごとの状態」のカード（`loadAreaBoard` / `createAreaCard`、SortableJS の並べ替え）は 2026-11-20 に削除し、AP の区間ごとの指示（§7.4）に置き換えた。`/api/area_status` などのログイン不要 API はウォッチのために残している。
+- **5 秒ごと**（`setInterval`）に `loadAreaMapTable`、`loadUserTable`、`loadEntryManagement`、`loadApNodesTable`、`loadCameras`、`loadPositionSettings`、`loadPositionEval`、`loadTunnelMap` を呼ぶ。AP位置設定とプリセット一覧は読み込み時だけ。
 - **Realtime**：anon key で `latest_wifi_reports` の変更を購読し、変更が来たら `loadTunnelMap()`。Supabase 側で Realtime が有効でないと何も起きない（エラーにもならない）。
 - **ちらつき防止**：表やカードは、前回の応答（`JSON.stringify`）を `last*Sig` に覚えておき、同じなら描き直さない。マップは毎回描き直す。
-- **入力中は止める**：`input` / `select` にフォーカスがある間は `isEditing=true` になり、定期更新を丸ごと止める。カードのドラッグ中は `isSorting`。
+- **入力中は止める**：`input` / `select` にフォーカスがある間は `isEditing=true` になり、定期更新を丸ごと止める。
 - **エラー時**：API エラーや想定外の形のときは描画しない（表が消えないように）。
 
 ### 7.3 トンネルマップの描画（`renderTunnelMap`）
 - 大きさ：高さ 260px（`H`。CSS の `#tunnelMap` の高さと同じ値にすること）、幅は親要素いっぱい。余白は左右 44px・上下 36px。左端に「外」、右端に「奥」。
 - 文字：エリア名などは 16px、AP 名と作業者名は 12px（DotGothic16）。
-- **エリア**：上辺にエリア名、点線で区切る。位置はサーバーの `area_layout`。
+- **AP の区間**：隣り合う AP の境目に点線を引き、上辺に「0〜100m」と区間の指示（例「100〜200m 待て」）を出す。指示が出ている区間は薄い黄色、ポップアップを開いている区間は薄い青。位置はサーバーの `segments`（`ap_segments`）。描画のたびに区間の位置を `tunnelSegments` に保存する（クリック判定用）。
 - **AP**：下辺の丸を実際の距離の位置に置く。
   - 稼働中・既設は青。停止中の ESP32 AP は灰色＋赤い ×。
   - ラベルは「AP3 100m」。重なる幅では「AP3」だけにし、それでも重なるなら数台おきに出す。
@@ -409,29 +415,21 @@
 - 閉じ方：×、外側のクリック、何もない所のクリック、Esc。5秒ごとの更新では閉じない。
 - マップに出ていない人（位置が推定できない人）には指示を送れない。
 
+**AP の区間ごとの指示**（2026-11-20〜。エリアカードの代わり）
+- 作業者の円以外の所（トンネルの中か上のラベル）をクリックすると、その区間のポップアップが出る（`findSegmentAt` → `openSegmentPopup`）。中身：区間（例「100〜200m」）、今の区間の指示、いる人、指示ボタン4つ（なし／待て／奥へ／手前へ）。
+- ボタンを押すと `POST /api/segment_instructions {segment_key, instruction}`（`saveSegmentInstruction`）。サーバーは区間の指示を `segment_instructions` に保存し、**その区間に今いる人全員**に個別指示（`device_instructions`）として送る（「なし」も送る）。
+- **あとから区間に入った人**には、`GET /api/wifi_map` のたびに `apply_segment_instructions` が、その区間の指示（「なし」以外）を1回だけ送る。送ったことは `device_segment_state` に覚える。「なし」の区間に入ったときは、今の指示を消さない。
+- 区間の指示のあとにポップアップで個別に出した指示は、その人が別の区間に移るか区間の指示が変わるまで残る。
+- ウォッチは今までどおり `device_instructions` を読むだけなので、ウォッチ側の変更は要らない。区間は AP の配置から決まる（AP を足す・距離を変えると区間も変わり、古い区間の指示は使われなくなる）。
+
 **火災位置**
 - 「火災位置を指定」を押すと指定モードになる（マップに赤い点線枠、ボタンは「指定をやめる」）。
 - マップをクリック → 確認ダイアログ → `POST /api/fire_location {ratio}`。Esc でもモードを抜ける。
 - 「火災位置を解除」→ 確認 → `DELETE /api/fire_location`。
 - ボタンの横に状態を出す（「火災位置: 入口から約320m（ウォッチに通知中）」／「未設定」）。
 
-### 7.5 エリアカード
-- エリアごとにカードを1枚作る（`createAreaCard`）。中身はエリア名、指示のプルダウン、火災通報のチェック、入場者の一覧と人数。
-- 指示の値と表示：
-
-| 値 | 表示 |
-|---|---|
-| `none` | 指示なし |
-| `waiting` | 待機 |
-| `evacuate_exit` | 出口へ避難 |
-| `evacuate_upwind` | 風上へ避難 |
-| `alert` | 警戒 |
-
-  サーバーは値を検証しない。
-- 指示か火災を変えると、すぐに `POST /api/area_status [{area_id, instruction, fire}]` で送る。
-- 見た目：指示に応じてカード上辺と見出しの色が変わる（待機=茶、避難=青、警戒=橙）。火災にチェックすると、赤い見出し＋「火災通報あり」の帯＋外枠の点滅。
-- カードはドラッグで並べ替えられ（SortableJS）、並べ終わると `POST /api/area_order` で保存する。
-- 入場者は `/api/entry_status` のエリアで振り分ける（§6.3 と同じ推定）。
+### 7.5 エリアカード（削除済み）
+2026-11-20 に削除した。代わりは §7.4 の AP の区間ごとの指示。`area_status_v2` のエリア指示・火災フラグを画面から変える手段は無くなった（値は DB に残る）。
 
 ### 7.6 入場管理
 - 「現在の入場状況」：入場中を上にして、名前・状態・入場時刻・退場時刻を出す。
@@ -616,6 +614,7 @@
 | 2026-10-11 | #25 | マップから個別指示、位置推定の一本化と平滑化、UI 改善、火災位置の通知、ログイン画面、仕様書・CodeQL 指摘の修正 |
 | 2026-11-11 | #26 | AP を 100m 間隔に修正、`ApMap`、ESP32-S3 AP（heartbeat・管理画面・ファームウェア）、AGENTS.md ほか開発支援。**本番デプロイは失敗中** |
 | 2026-11-18 | #28〜#30 | ESP32 カメラ（外から見るコマ送り、RGB565→JPEG 変換）、カメラが位置の目印を兼ね距離を ESP32 AP 表と連動 |
+| 2026-11-20 | — | エリアカードを削除し、AP の区間ごとの指示（個別指示として送る）に。マップの点線を AP の区間に。ESP32 AP 欄をマップの真上に（1366×768 でスクロールせずに両方見える）。位置推定 ⑤（Wi-Fi だけ・上位3つの当てはめ） |
 | 2026-11-19 | — | ウォッチのスキャンを RSSI 上位3つで `wifi_reports_v2` / `ble_reports` に。位置推定を ①〜④ の4方式にし、画面で切り替え・現地で比較記録 |
 | 2026-11-18 | — | ESP32 の位置の目印を BLE ビーコンに（`esp32s3_ap` 2.0.0、カメラ 1.4.0）。ウォッチは BLE 優先・無ければ Wi-Fi（`docs/WATCH_SCAN_REPORTS.md`） |
 

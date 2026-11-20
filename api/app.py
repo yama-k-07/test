@@ -5,6 +5,7 @@ from functools import wraps
 from datetime import datetime, timezone, timedelta
 import threading
 import hmac
+import math
 import json
 import os
 import re
@@ -48,6 +49,10 @@ TABLE_WIFI_SCAN = "wifi_reports_v2"
 TABLE_BLE_SCAN = "ble_reports"
 TABLE_POSITION_SETTINGS = "position_settings"
 TABLE_POSITION_EVAL = "position_eval"
+# AP の区間（0〜100m など）ごとのまとめた指示と、各ウォッチに最後に送った区間の指示。
+# 区間の指示は device_instructions（個別指示）として送るので、ウォッチ側は変わらない。スキーマは supabase/segment_instructions.sql。
+TABLE_SEGMENT_INSTRUCTIONS = "segment_instructions"
+TABLE_DEVICE_SEGMENT_STATE = "device_segment_state"
 
 entry_status_table = []
 last_seen_dict = {}
@@ -409,6 +414,7 @@ POSITION_METHODS = [
     ('top2_series', '② 上位2つ＋時系列（カルマン）'),
     ('rssi_basic', '③ RSSI の差＋今までの平滑化'),
     ('rssi_series', '④ RSSI の差＋時系列（カルマン）'),
+    ('wifi3_series', '⑤ Wi-Fi だけ・上位3つの当てはめ＋時系列'),
 ]
 POSITION_METHOD_KEYS = [k for k, _ in POSITION_METHODS]
 DEFAULT_POSITION_METHOD = 'top2_basic'   # 今までと同じ結果
@@ -431,6 +437,13 @@ SERIES_WALK_MPS = 1.5         # 位置のゆらぎ（人が歩く速さ）[m/s]
 SERIES_MAX_SPEED_MPS = 3.0    # これを超える速さでしか説明できない飛びは捨てる [m/s]
 SERIES_GATE_SIGMA = 3.0       # 予測から 3σ を超えた値は捨てる
 SERIES_RESET_AFTER = 3        # 続けてこの回数捨てたら、本当に動いたとみなして新しい値から始め直す
+
+# ⑤: Wi-Fi のスキャンだけを使い、上位3つの RSSI すべてに距離減衰の式を当てはめる（③ のように2つの間に置くのではない）。
+#   トンネル上の各地点 x について、AP i までの距離 r_i = √((x − d_i)² + 高さ²) から
+#   予想 RSSI = A − 10·n·log10(r_i) を作り、実際の RSSI との差の二乗和が最小の x を 1m 刻みで探す。
+#   A（出力など機種の違い）は x ごとに最小二乗で決めるので、絶対値は要らない。3つ目の AP がずれを打ち消す。
+WIFI3_AP_HEIGHT_M = 3.0     # AP とウォッチの高さの差（真下で r が 0 にならないように）
+WIFI3_STEP_M = 1.0
 
 # 新しい表（wifi_reports_v2 / ble_reports）で、最後に AP が分かったスキャンがこれより古ければ「今どこか分からない」
 SCAN_STALE_SEC = 2 * SMOOTHING_HALF_LIFE_SEC
@@ -461,7 +474,32 @@ def scan_rssi_m(scan, ap_map):
     return da + (r_a if db > da else -r_a)
 
 
-SCAN_ESTIMATORS = {'top2': scan_top2_m, 'rssi': scan_rssi_m}
+def scan_wifi3_m(scan, ap_map):
+    """⑤ Wi-Fi の上位3つ（最低2つ）の RSSI に距離減衰の式を当てはめた位置。BLE のスキャンには使わない（None）。
+    RSSI が無い旧形式は top2 と同じ"""
+    if scan['source'] != 'wifi':
+        return None
+    known = [(ap_map.distance(mac), rssi) for mac, rssi in scan['aps'][:3] if ap_map.distance(mac) is not None]
+    with_rssi = [(d, r) for d, r in known if r is not None]
+    if len(with_rssi) < 2:
+        return scan_top2_m(scan, ap_map)
+    lo = ap_map.start - ap_map.spacing * 0.5
+    hi = ap_map.end + ap_map.spacing * 0.5
+    best_x, best_err = None, None
+    steps = int((hi - lo) / WIFI3_STEP_M) + 1
+    for k in range(steps):
+        x = lo + k * WIFI3_STEP_M
+        terms = [(r, 10 * PATH_LOSS_N * math.log10(math.sqrt((x - d) ** 2 + WIFI3_AP_HEIGHT_M ** 2))) for d, r in with_rssi]
+        A = sum(r + loss for r, loss in terms) / len(terms)
+        err = sum((r - (A - loss)) ** 2 for r, loss in terms)
+        if best_err is None or err < best_err - 1e-9:
+            best_x, best_err = x, err
+    return best_x
+
+
+SCAN_ESTIMATORS = {'top2': scan_top2_m, 'rssi': scan_rssi_m, 'wifi3': scan_wifi3_m}
+# 方式ごとに作る組み合わせ（1回分の求め方 → basic / series）。⑤ は series だけ
+SCAN_ESTIMATOR_MODES = {'top2': ('basic', 'series'), 'rssi': ('basic', 'series'), 'wifi3': ('series',)}
 
 
 def series_distance_m(points, ap_map):
@@ -562,11 +600,14 @@ def estimate_methods(scans, ap_map, ref_t):
         # basic は今までと同じく「新しい方から SMOOTHING_MAX_SAMPLES 回のスキャン」のうち AP が分かったもの
         basic = [(d, age, SOURCE_WEIGHT.get(src, 1.0)) for age, d, src, i in points
                  if i < SMOOTHING_MAX_SAMPLES and age <= SMOOTHING_WINDOW_SEC]
-        out[f'{est_name}_basic'] = smooth_distance_m(basic, ap_map.outlier_m) if basic else None
-        series = sorted(points[:SERIES_MAX_SAMPLES], key=lambda p: -p[0])   # 古い順
-        out[f'{est_name}_series'] = (series_distance_m([(-age, d, src) for age, d, src, _ in series], ap_map)
-                                     if series else None)
-        out[f'{est_name}_samples'] = len(basic)
+        modes = SCAN_ESTIMATOR_MODES.get(est_name, ('basic', 'series'))
+        if 'basic' in modes:
+            out[f'{est_name}_basic'] = smooth_distance_m(basic, ap_map.outlier_m) if basic else None
+        if 'series' in modes:
+            series = sorted(points[:SERIES_MAX_SAMPLES], key=lambda p: -p[0])   # 古い順
+            out[f'{est_name}_series'] = (series_distance_m([(-age, d, src) for age, d, src, _ in series], ap_map)
+                                         if series else None)
+        out[f'{est_name}_samples'] = len(basic) if 'basic' in modes else len(points[:SERIES_MAX_SAMPLES])
     for k in POSITION_METHOD_KEYS:
         if out.get(k) is not None:
             out[k] = round(ap_map.clamp(out[k]), 1)
@@ -1429,6 +1470,12 @@ def get_wifi_map():
     fire = load_fire_location()
     alerts = update_fire_alerts(reports, positions, fire, ap_map)
 
+    # AP の区間の指示: 区間に入ったウォッチに送る（送ったら instruction_map も新しくする）
+    segments = ap_segments(ap_map)
+    seg_rows = load_segment_instructions()
+    if apply_segment_instructions(positions, segments, seg_rows):
+        instruction_map = {r['device_id']: r for r in load_device_instructions() if r.get('device_id')}
+
     workers = []
     for row in (reports or []):
         device_id = row.get('device_id')
@@ -1460,12 +1507,147 @@ def get_wifi_map():
         'area_layout': layout,
         'online_device_ids': online_device_ids,
         'position_method': positions_method(positions),
+        'segments': segments_with_instructions(segments, seg_rows, positions),
         'fire': {
             'active': fire['active'],
             'distance_m': fire['distance_m'],
             'ratio': round(ap_map.to_ratio(fire["distance_m"]), 4) if fire['active'] else None,
         },
     })
+
+
+# ==========================================
+#  AP の区間ごとの指示
+# ==========================================
+# 区間は隣り合う AP の間（0〜100m、100〜200m …）。AP を足す・距離を変えると区間も変わる。
+# 区間に指示を出すと、その区間に今いるウォッチに個別指示（device_instructions）を送る（「なし」も送る）。
+# あとから区間に入ったウォッチには、その区間の指示が「なし」以外なら送る（「なし」の区間に入っても今の指示は消さない）。
+# 区間の指示のあとに個別に出した指示は、別の区間に移るか区間の指示が変わるまで残る。
+
+def ap_segments(ap_map):
+    """[{key, start_m, end_m, start, end}]（start / end はマップ横軸の比率）"""
+    ds = sorted({e['distance_m'] for e in ap_map.entries.values()})
+    out = []
+    for a, b in zip(ds, ds[1:]):
+        out.append({'key': f"{a:g}-{b:g}", 'start_m': a, 'end_m': b,
+                    'start': round(ap_map.to_ratio(a), 4), 'end': round(ap_map.to_ratio(b), 4)})
+    return out
+
+
+def segment_for_distance(segments, distance_m):
+    if not segments or distance_m is None:
+        return None
+    for seg in segments:
+        if distance_m < seg['end_m']:
+            return seg
+    return segments[-1]
+
+
+def load_segment_instructions():
+    """segment_key → 行。テーブルが無ければ空"""
+    try:
+        rows = supabase.table(TABLE_SEGMENT_INSTRUCTIONS).select("*").execute().data or []
+    except Exception as e:
+        print(f"Error loading segment_instructions: {e}")
+        return {}
+    return {r['segment_key']: r for r in rows if r.get('segment_key')}
+
+
+def load_device_segment_state():
+    try:
+        rows = supabase.table(TABLE_DEVICE_SEGMENT_STATE).select("*").execute().data or []
+    except Exception as e:
+        print(f"Error loading device_segment_state: {e}")
+        return {}
+    return {r['device_id']: r for r in rows if r.get('device_id')}
+
+
+def send_segment_instruction(device_id, seg_key, row, now):
+    """区間の指示を個別指示として送り、送ったことを記録する"""
+    supabase.table(TABLE_DEVICE_INSTRUCTIONS).upsert({
+        'device_id': device_id, 'instruction': row['instruction'], 'updated_at': now,
+    }).execute()
+    supabase.table(TABLE_DEVICE_SEGMENT_STATE).upsert({
+        'device_id': device_id, 'segment_key': seg_key, 'segment_updated_at': row.get('updated_at'), 'updated_at': now,
+    }).execute()
+
+
+def apply_segment_instructions(positions, segments, seg_rows=None):
+    """区間に入ったウォッチに、その区間の指示を送る（GET /api/wifi_map から毎回呼ぶ。変化があったときだけ書く）。
+    戻り値: 送った device_id の集合"""
+    seg_rows = load_segment_instructions() if seg_rows is None else seg_rows
+    if not segments:
+        return set()
+    states = load_device_segment_state()
+    now = now_iso()
+    sent = set()
+    for did, pos in (positions or {}).items():
+        seg = segment_for_distance(segments, pos.get('distance_m'))
+        if seg is None:
+            continue
+        row = seg_rows.get(seg['key'])
+        state = states.get(did) or {}
+        moved = state.get('segment_key') != seg['key']
+        changed = row is not None and state.get('segment_updated_at') != row.get('updated_at')
+        try:
+            if row and row.get('instruction') not in (None, 'none') and (moved or changed):
+                send_segment_instruction(did, seg['key'], row, now)
+                sent.add(did)
+            elif moved:
+                # 「なし」の区間に入った: 指示は変えず、どの区間にいるかだけ覚える（次に区間の指示が出たら送る）
+                supabase.table(TABLE_DEVICE_SEGMENT_STATE).upsert({
+                    'device_id': did, 'segment_key': seg['key'],
+                    'segment_updated_at': (row or {}).get('updated_at'), 'updated_at': now,
+                }).execute()
+        except Exception as e:
+            print(f"Error applying segment instruction to {did}: {e}")
+    return sent
+
+
+def segments_with_instructions(segments, seg_rows, positions):
+    by_seg = {}
+    for did, pos in (positions or {}).items():
+        seg = segment_for_distance(segments, pos.get('distance_m'))
+        if seg:
+            by_seg.setdefault(seg['key'], []).append(did)
+    return [dict(seg, instruction=(seg_rows.get(seg['key']) or {}).get('instruction') or 'none',
+                 device_ids=sorted(by_seg.get(seg['key'], []))) for seg in segments]
+
+
+@app.route('/api/segment_instructions', methods=['GET', 'POST'])
+@login_required
+def handle_segment_instructions():
+    """GET は区間の一覧（指示・いるウォッチ付き）。POST {segment_key, instruction} で区間に指示を出し、
+    その区間に今いるウォッチ全員に個別指示として送る（instruction は DEVICE_INSTRUCTIONS のどれか）"""
+    ap_map = load_ap_map()
+    segments = ap_segments(ap_map)
+    reports = load_wifi_reports()
+    positions, _ = estimate_positions(reports, ap_map, load_area_order(), load_area_table())
+    if request.method == 'GET':
+        return jsonify(segments_with_instructions(segments, load_segment_instructions(), positions))
+
+    data = request.json or {}
+    key = str(data.get('segment_key') or '')
+    instruction = data.get('instruction')
+    seg = next((x for x in segments if x['key'] == key), None)
+    if seg is None:
+        return jsonify({'error': 'その区間はありません（AP の配置が変わった可能性があります）'}), 400
+    if instruction not in DEVICE_INSTRUCTIONS:
+        return jsonify({'error': f'instruction は {sorted(DEVICE_INSTRUCTIONS)} のいずれかである必要があります'}), 400
+    now = now_iso()
+    row = {'segment_key': key, 'start_m': seg['start_m'], 'end_m': seg['end_m'], 'instruction': instruction, 'updated_at': now}
+    try:
+        supabase.table(TABLE_SEGMENT_INSTRUCTIONS).upsert(row).execute()
+        sent = []
+        for did, pos in positions.items():
+            here = segment_for_distance(segments, pos.get('distance_m'))
+            if here and here['key'] == key:
+                send_segment_instruction(did, key, row, now)   # 区間に指示を出したときは「なし」も送る
+                sent.append(did)
+    except Exception as e:
+        print(f"Error saving segment instruction {key}: {e}")
+        return jsonify({'error': '保存に失敗しました（supabase/segment_instructions.sql は実行済みですか？）'}), 500
+    return jsonify({'message': 'saved', 'segment_key': key, 'instruction': instruction, 'sent_device_ids': sorted(sent)})
 
 
 def positions_method(positions):

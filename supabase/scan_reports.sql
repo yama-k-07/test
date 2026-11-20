@@ -30,6 +30,7 @@ create index if not exists ble_reports_device_idx on public.ble_reports (device_
 
 -- 画面で選んだ位置推定の方式（1行だけ: id=1）。
 -- top2_basic=① 上位2つ＋今までの平滑化 / top2_series=② 上位2つ＋時系列 / rssi_basic=③ RSSI の差 / rssi_series=④ RSSI の差＋時系列
+-- wifi3_series=⑤ Wi-Fi だけ・上位3つの当てはめ＋時系列
 create table if not exists public.position_settings (
   id         integer primary key default 1 check (id = 1),
   method     text not null default 'top2_basic',
@@ -49,6 +50,7 @@ create table if not exists public.position_eval (
   top2_series     double precision,
   rssi_basic      double precision,
   rssi_series     double precision,
+  wifi3_series    double precision,          -- ⑤（2026-11-20 追加）
   note            text
 );
 

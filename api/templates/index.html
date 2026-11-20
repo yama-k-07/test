@@ -8,7 +8,6 @@
   <link href="https://fonts.googleapis.com/css2?family=DotGothic16&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@0.9.4/css/bulma.min.css">
   <link rel="stylesheet" href="{{url_for('static', filename='style.css')}}">
-  <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
   <script>
     window.SUPABASE_CONFIG = {
@@ -30,13 +29,37 @@
 
 
 
+    <section class="box ap-nodes-box">
+      <div class="box-head">
+        <h2 class="subtitle">ESP32 AP</h2>
+        <span class="section-hint">電源を入れると自動で登録されます。入口からの距離を入れて「保存」すると位置推定に使われます。</span>
+      </div>
+      <div class="table-container ap-nodes-scroll">
+        <table class="table is-fullwidth is-narrow">
+          <thead>
+            <tr>
+              <th>状態</th>
+              <th>表示名</th>
+              <th>BSSID</th>
+              <th>入口からの距離 [m]</th>
+              <th>位置推定</th>
+              <th>最終通信</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody id="apNodesTableBody"></tbody>
+        </table>
+      </div>
+    </section>
+
     <section class="box">
-      <h2 class="subtitle">トンネルマップ</h2>
-      <p class="section-hint">作業者アイコンをクリックすると、そのデバイスに指示を送れます。</p>
-      <div class="fire-controls">
-        <button type="button" class="button is-danger" id="fireModeBtn" onclick="toggleFireMode()">火災位置を指定</button>
-        <button type="button" class="button" id="fireClearBtn" onclick="clearFireLocation()" disabled>火災位置を解除</button>
-        <span id="fireStatus" class="fire-status">火災位置: 未設定</span>
+      <div class="box-head">
+        <h2 class="subtitle">トンネルマップ</h2>
+        <div class="fire-controls">
+          <button type="button" class="button is-danger is-small" id="fireModeBtn" onclick="toggleFireMode()">火災位置を指定</button>
+          <button type="button" class="button is-small" id="fireClearBtn" onclick="clearFireLocation()" disabled>火災位置を解除</button>
+          <span id="fireStatus" class="fire-status">火災位置: 未設定</span>
+        </div>
       </div>
       <div class="tunnel-map-wrap">
         <canvas id="tunnelMap"></canvas>
@@ -47,10 +70,12 @@
         <li><span class="legend-dot legend-report"></span>通報中</li>
         <li><span class="legend-dot legend-offline"></span>オフライン（最後の位置）</li>
         <li><span class="legend-dot legend-approx"></span>エリアのみ判明</li>
+        <li><span class="legend-seg">0〜100m</span>AP の区間（押すとまとめて指示）</li>
         <li><span class="legend-tag">待て</span>出している指示</li>
         <li><span class="legend-fire"></span>火災位置</li>
         <li><span class="legend-ap-off"></span>停止中の ESP32 AP</li>
       </ul>
+      <p class="section-hint">作業者アイコンを押すとその人だけに、点線で区切った AP の区間を押すとその区間にいる全員に指示を出せます（あとから区間に入った人にも届きます）。</p>
     </section>
 
     <section class="box">
@@ -75,16 +100,6 @@
           </table>
         </div>
       </details>
-    </section>
-
-    <section class="box">
-      <h2 class="subtitle">エリアごとの状態</h2>
-      <div class="direction-row">
-        <span>← トンネル外側</span>
-        <span>トンネル内側 →</span>
-      </div>
-      <div id="areaBoard" class="area-board"></div>
-      <p class="section-hint">カードはドラッグで並べ替えできます。</p>
     </section>
 
     <section class="box">
@@ -215,26 +230,6 @@
 
     </div>
 
-    <section class="box">
-      <h2 class="subtitle">ESP32 AP</h2>
-      <p class="section-hint">ESP32 は電源を入れると自動で登録されます（上り回線がある場合）。入口からの距離を入れて「保存」すると位置推定に使われます。30 秒ごとに稼働状況が更新されます。</p>
-      <div class="table-container">
-        <table class="table is-fullwidth">
-          <thead>
-            <tr>
-              <th>状態</th>
-              <th>表示名</th>
-              <th>BSSID</th>
-              <th>入口からの距離 [m]</th>
-              <th>位置推定</th>
-              <th>最終通信</th>
-              <th>操作</th>
-            </tr>
-          </thead>
-          <tbody id="apNodesTableBody"></tbody>
-        </table>
-      </div>
-    </section>
 
     <section class="box">
       <h2 class="subtitle">位置推定の方式</h2>
