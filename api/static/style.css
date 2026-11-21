@@ -1257,3 +1257,52 @@ input[type="checkbox"]:checked {
   position: relative;
   z-index: 40;
 }
+
+/* ===== 2026-11-22 縦長レイアウト ===== */
+/* すべての欄を縦 1 列に並べる（画面が広くても横に並べない） */
+.settings-container {
+  flex-direction: column !important;
+  gap: 0;
+}
+.settings-container .column-box {
+  width: 100% !important;
+}
+.entry-status-grid {
+  grid-template-columns: 1fr !important;
+}
+
+/* 欄と欄の間を広く（見出しの札が欄の上の枠に乗るので、その分も空ける） */
+.box,
+.position-box,
+.ap-nodes-box,
+.settings-container .column-box {
+  margin-bottom: 56px !important;
+}
+.position-box,
+.ap-nodes-box,
+.position-box + .box {
+  padding-top: 25px;
+  padding-bottom: 25px;
+}
+.settings-heading {
+  margin-top: 24px;
+  margin-bottom: 40px !important;
+}
+
+/* 「? 使い方」は重ねて出さず、その欄の中で下に広げる（下の欄を押し下げる。ほかの欄と被らない） */
+.card-help[open] {
+  flex: 1 1 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+.card-help-body {
+  position: static;
+  width: 100%;
+  margin-top: 6px;
+  box-shadow: none;
+  z-index: auto;
+}
+.box:has(.card-help[open]) {
+  z-index: auto;
+}

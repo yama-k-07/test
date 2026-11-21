@@ -59,7 +59,7 @@ ESP32-S3 ビーコン（BLE）──heartbeat──> /api/ap_heartbeat ──> S
 | セクションの並び・見出し・説明文を変える | `index.html`（`<section class="box">` 単位） |
 | 新しいセクションを足す | `index.html` に器（`id` 付き）→ `admin.js` に `loadXxx()` を作り、`DOMContentLoaded` と `setInterval` の両方に登録（§4 の更新パターン） |
 | AP の区間ごとの指示（マップの点線の間を押す） | `admin.js` の `findSegmentAt` / `openSegmentPopup` / `saveSegmentInstruction`、区間の描画は `renderTunnelMap`。サーバーは `app.py` の `ap_segments` / `apply_segment_instructions` / `handle_segment_instructions`（区間に入った人へ送る決まりはここ） |
-| 位置推定の欄とマップを1画面に収める | `index.html` の並び（位置推定の欄がマップの真上、ESP32 AP 欄は設定の下）、`style.css` の `.position-box` / `.position-eval-scroll` / `.box-head` / `.ap-nodes-box` |
+| 欄の並び・間隔（全欄を縦 1 列） | `index.html` の並び（上から 位置推定の方式 → マップ → カメラ → 入場管理 → 設定 → ESP32 AP）、`style.css` 末尾の「2026-11-22 縦長レイアウト」（欄の間 56px、`.settings-container` / `.entry-status-grid` を 1 列に、`.card-help` を欄の中で広げる） |
 | デモ（ウォッチ無しで動かす） | `scripts/demo_watch.py`（歩き方 `Walker`、電波の作り方 `rssi_at` / 定数 `BLE_*` `WIFI_*`）。使い方は docs/AI_WORKFLOW.md §5 |
 | トンネルマップの描き方（色・大きさ・ラベル） | `admin.js` の `renderTunnelMap`（`const H`・色定数 `C_*` もここ）。高さを変えたら `style.css` の `#tunnelMap` の `height` も同じ値に |
 | 作業者アイコンのクリック・ポップアップ | `admin.js` の `initTunnelMapInteraction` / `findWorkerAt` / `openWorkerPopup` |
