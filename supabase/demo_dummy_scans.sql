@@ -10,7 +10,7 @@
 -- RSSI は scripts/demo_watch.py と同じ式: 1m での強さ − 10·n·log10(距離) ＋ ばらつき ±4dB。距離は高さの差 3m 込み。
 --   BLE: -59dBm・n=2.2（-95 より弱いものは見えない）、Wi-Fi: -40dBm・n=2.0（-92 より弱いものは見えない）
 -- 位置推定は直近 2 分のスキャンを使うので、マップで見るのは実行してから 1〜2 分の間だけ（もう一度実行すれば続く）。
--- 装置 ID を変えるときは、①② の params の 'demo-01' を書き換える。通報中にしたいときは ② の report を true に。
+-- 装置 ID を変えるときは、①② の params の 'demo-01' を書き換える。通報中にしたいときは ① ② の report を true に（ウォッチと同じく両方の表に送る）。
 -- BLE が 1 行も入らないとき: 下の「確かめる」の SELECT で、fw が ble- で始まり距離の入った行があるか見る。
 -- 動き回る人を続けて入れたいときは scripts/demo_watch.py（docs/AI_WORKFLOW.md §5）。
 
@@ -40,11 +40,12 @@ ranked as (
   select t, mac, rssi, row_number() over (partition by t order by rssi desc) as rn
   from seen where rssi >= -95
 )
-insert into public.ble_reports (device_id, scanned_at, created_at, mac01, rssi01, mac02, rssi02, mac03, rssi03)
+insert into public.ble_reports (device_id, scanned_at, created_at, mac01, rssi01, mac02, rssi02, mac03, rssi03, report)
 select (select device_id from params), t, t,
        max(mac) filter (where rn = 1), max(rssi) filter (where rn = 1),
        max(mac) filter (where rn = 2), max(rssi) filter (where rn = 2),
-       max(mac) filter (where rn = 3), max(rssi) filter (where rn = 3)
+       max(mac) filter (where rn = 3), max(rssi) filter (where rn = 3),
+       false   -- 通報（② と同じ値に。true にすると demo-01 がマップで赤く光る）
 from ranked where rn <= 3
 group by t;
 

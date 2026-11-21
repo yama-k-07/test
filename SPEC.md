@@ -129,7 +129,7 @@
 | `TABLE_DEVICE_FIRE_ALERTS` | ★`device_fire_alerts` | `device_id` | `fire_active`, `direction`, `distance_m`, `message`, `approx`, `updated_at` | Flask | ウォッチ |
 | `TABLE_AP_NODES` | `ap_nodes` | `mac`（大文字） | `label`, `distance_m`, `enabled`, `fw`, `uptime_s`, `sta_count`, `tx_power_dbm`, `channel`, `uplink_rssi`, `last_seen`, `created_at` | ESP32 ＋ Flask | Flask |
 | `TABLE_WIFI_SCAN` | `wifi_reports_v2` | `id` | `device_id`, `scanned_at`（スキャンした時刻）, `created_at`, `mac01`/`rssi01`〜`mac03`/`rssi03`（RSSI 上位3つ）, `report`（通報。`supabase/wifi_reports_v2_report.sql`） | ウォッチ | Flask（装置の一覧・位置推定・入退場・通報）、ブラウザ（Realtime） |
-| `TABLE_BLE_SCAN` | `ble_reports` | `id` | 同上（`MAMOTCHI-` の BLE ビーコンだけ） | ウォッチ | Flask（位置推定） |
+| `TABLE_BLE_SCAN` | `ble_reports` | `id` | 同上（`MAMOTCHI-` の BLE ビーコンだけ）。`report` は空を許す（`supabase/ble_reports_report.sql`） | ウォッチ | Flask（位置推定） |
 | `TABLE_POSITION_SETTINGS` | `position_settings` | `id`（=1） | `method`（`top2_basic` / `top2_series` / `rssi_basic` / `rssi_series`）, `updated_at` | Flask | Flask |
 | `TABLE_POSITION_EVAL` | `position_eval` | `id` | `device_id`, `true_distance_m`, `method_selected`, `sources`, `top2_basic`, `top2_series`, `rssi_basic`, `rssi_series`, `note`, `created_at` | Flask | Flask |
 | `TABLE_SEGMENT_INSTRUCTIONS` | `segment_instructions` | `segment_key`（例 `0-100`） | `start_m`, `end_m`, `instruction`（`none/wait/inward/outward`）, `updated_at` | Flask | Flask |
@@ -242,7 +242,7 @@
 - `device_id`: どちらかの表に行がある装置
 - `created_at`: 最後にスキャンが届いた時刻（オンライン判定に使う）
 - `mac01` / `mac02`: 位置の目印の上位2つ。最新の BLE が最新のスキャンから `LATEST_BLE_PRIORITY_SEC`（30 秒）以内なら BLE、そうでなければ Wi-Fi
-- `report`: 最新の `wifi_reports_v2.report`（列が無い行は false）
+- `report`: 通報（`report_of`）。`wifi_reports_v2` と `ble_reports` それぞれの最新の行のうち、**後から届いた方**の `report`。空（列が無い・送られていない）の行は使わず、もう一方の値を使う。どちらも空なら false
 
 「最新」は `id` が大きい行（＝後から届いた行）。BLE は 10 分より前の行を読まないので、BLE しか送らない装置は 10 分でマップから消える。
 
@@ -331,7 +331,7 @@
 - 時刻の解析は `parse_ts()` が行う。Python 3.10 の `fromisoformat` は小数秒の桁が6桁でないと失敗するので、6桁に揃えてから読む。
 
 ### 6.6 通報フラグの同期 `sync_device_reports_from_wifi()`
-ウォッチは通報（`report`）を `wifi_reports_v2` に Wi-Fi のスキャンと一緒に書く（2026-11-22 まで旧 `wifi_reports`）。§6.1 の最新の `report` を `device_instructions.report` に写す。値が変わったデバイスだけ upsert する。マップでは通報中の作業者を赤く光らせる。
+ウォッチは通報（`report`）を `wifi_reports_v2` と `ble_reports` の両方にスキャンと一緒に書き、後から届いた方の値を使う（2026-11-22 まで旧 `wifi_reports`）。§6.1 の最新の `report` を `device_instructions.report` に写す。値が変わったデバイスだけ upsert する。マップでは通報中の作業者を赤く光らせる。
 
 ### 6.7 火災の方向計算
 - 火災位置は `fire_location`（id=1 の1行）に、入口からの距離として保存する。両端の AP の範囲に収め、1m 単位。
@@ -527,7 +527,7 @@
 | 方向 | 対象 | 内容 |
 |---|---|---|
 | ウォッチ →（旧） | `wifi_reports` | 2026-11-22 からサーバーは読まない。今のウォッチの書き込みは害が無いので表は残す |
-| ウォッチ → | `wifi_reports_v2` / `ble_reports` | **送り先はこの2つだけ**。`device_id`, `scanned_at`（タイムゾーン付き）, `mac01`/`rssi01`〜`mac03`/`rssi03`（強い順。位置推定の重み 0.8 はこの順番が前提）、`wifi_reports_v2.report`（通報。Wi-Fi の行は AP が見えなくても送る）。Wi-Fi のスキャンと `MAMOTCHI-` の BLE のスキャンを別の表に 1 回 1 行（`docs/WATCH_SCAN_REPORTS.md`、`supabase/scan_reports.sql`） |
+| ウォッチ → | `wifi_reports_v2` / `ble_reports` | **送り先はこの2つだけ**。`device_id`, `scanned_at`（タイムゾーン付き）, `mac01`/`rssi01`〜`mac03`/`rssi03`（強い順。位置推定の重み 0.8 はこの順番が前提）、`report`（通報。両方の表に送り、後から届いた方を使う。Wi-Fi の行は AP が見えなくても送る）。Wi-Fi のスキャンと `MAMOTCHI-` の BLE のスキャンを別の表に 1 回 1 行（`docs/WATCH_SCAN_REPORTS.md`、`supabase/scan_reports.sql`） |
 | → ウォッチ | `device_instructions` | `instruction ∈ {none, wait, inward, outward}`（個別指示） |
 | → ウォッチ | `device_fire_alerts` | 自分の `device_id` の行。`direction ∈ {inward, outward, near, unknown}`、`message` はそのまま表示できる文（§6.7） |
 | → ウォッチ（可能性） | `area_status_v2` / ログイン不要の API | `/api/area_status`、`/api/user`、`/api/area`、`/api/area_order`、`/api/entry_status`。ウォッチが使っているかはコードから確定できない |
@@ -629,6 +629,7 @@
 | 2026-10-11 | #25 | マップから個別指示、位置推定の一本化と平滑化、UI 改善、火災位置の通知、ログイン画面、仕様書・CodeQL 指摘の修正 |
 | 2026-11-11 | #26 | AP を 100m 間隔に修正、`ApMap`、ESP32-S3 AP（heartbeat・管理画面・ファームウェア）、AGENTS.md ほか開発支援。**本番デプロイは失敗中** |
 | 2026-11-18 | #28〜#30 | ESP32 カメラ（外から見るコマ送り、RGB565→JPEG 変換）、カメラが位置の目印を兼ね距離を ESP32 AP 表と連動 |
+| 2026-11-22 | — | `ble_reports` にも通報（`report`）。両方の表の最新の行のうち後から届いた方を使う（`report_of`） |
 | 2026-11-22 | — | ウォッチの送り先を `wifi_reports_v2` / `ble_reports` に一本化（旧 `wifi_reports` は読まない）。通報は `wifi_reports_v2.report`、画面の Realtime も `wifi_reports_v2`。作業者ポップアップが下の欄に隠れないように・値が無いときは理由を表示 |
 | 2026-11-22 | — | 画面を縦長に（全欄を縦 1 列、欄の間 56px）。「使い方」は欄の中で広げて、ほかの欄と重ならないように |
 | 2026-11-21 | — | エリア割当設定の欄を削除。AP位置設定を「MAC と距離（番号は自動）」に（`ap_positions.distance_m`）。ESP32 AP を画面から追加。全部の欄に折りたためる「使い方」 |

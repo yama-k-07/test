@@ -70,13 +70,26 @@ LATEST_BLE_WINDOW_SEC = 600
 LATEST_BLE_PRIORITY_SEC = 30
 
 
+def report_of(wifi_row, wifi_t, ble_row, ble_t):
+    """通報の有無。ウォッチは wifi_reports_v2 と ble_reports の両方に report を送るので、
+    それぞれの最新の行のうち後から届いた方の値を使う。
+    report が空（列が無い・送られていない）の行は使わず、もう一方の値を使う。どちらも空なら通報なし"""
+    candidates = []
+    for row, t in ((wifi_row, wifi_t), (ble_row, ble_t)):
+        if row is not None and row.get('report') is not None and t is not None:
+            candidates.append((t, bool(row.get('report'))))
+    if not candidates:
+        return False
+    return max(candidates, key=lambda c: c[0])[1]
+
+
 def load_wifi_reports():
     """装置ごとの最新の状態を返す（マップの装置の一覧・入退場・通報・/api/entry_status が使う）。
     2026-11-22 から wifi_reports_v2（Wi-Fi のスキャンと通報）と ble_reports（BLE のスキャン）から作り、
     旧 wifi_reports は読まない。各行の形は旧 wifi_reports の最新行と同じ:
       device_id, created_at（最後にスキャンが届いた時刻）,
       mac01 / mac02（直近の BLE が見えていれば BLE の上位2つ、無ければ Wi-Fi の上位2つ）,
-      report（最新の wifi_reports_v2.report）"""
+      report（通報。wifi_reports_v2 と ble_reports の最新の行のうち、後から届いた方の値。report_of を参照）"""
     try:
         wifi_rows = (supabase.table(TABLE_WIFI_SCAN).select("*")
                      .order("id", desc=True).limit(LATEST_WIFI_ROWS).execute().data or [])
@@ -112,7 +125,7 @@ def load_wifi_reports():
             'created_at': newest.isoformat() if newest else (w or b).get('created_at'),
             'mac01': marks.get('mac01'),
             'mac02': marks.get('mac02'),
-            'report': bool((w or {}).get('report')),
+            'report': report_of(w, tw, b, tb),
         })
     return result
 

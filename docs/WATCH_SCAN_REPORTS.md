@@ -2,7 +2,7 @@
 
 ウォッチの送り先は **`wifi_reports_v2`（Wi-Fi のスキャンと通報）と `ble_reports`（BLE のスキャン）の2つだけ**です。
 **2026-11-22 から、サーバーは今までの `wifi_reports` を読みません。** 新しい表に送るように直るまで、そのウォッチはマップ・入退場・通報に出ません。
-テーブルの定義は `supabase/scan_reports.sql` と `supabase/wifi_reports_v2_report.sql`（通報の列）です。
+テーブルの定義は `supabase/scan_reports.sql` と、通報の列の `supabase/wifi_reports_v2_report.sql`・`supabase/ble_reports_report.sql` です。
 
 ESP32 は位置の目印として **BLE ビーコン**を出しています（名前が `MAMOTCHI-` で始まる）。現場の **Wi-Fi AP（既設6台）もそのまま使います**。
 
@@ -24,7 +24,8 @@ ESP32 は位置の目印として **BLE ビーコン**を出しています（�
 
 ### BLE のスキャンごとに `ble_reports` へ 1 行
 
-列は `wifi_reports_v2` と同じです。
+列は `wifi_reports_v2` と同じです（`report` も入れる）。
+- **`report`（通報）は両方の表に入れる**。サーバーは、両方の表の最新の行のうち**後から届いた方**の値を使う。BLE は毎秒届くので、通報が早く伝わる
 - 名前（Complete Local Name）が **`MAMOTCHI-` で始まる**ビーコンだけを対象にする
 - 直近のスキャン結果（例: 直近 2〜3 秒）から、RSSI の強い順に上位3つを入れる
 - 1つも見えなければ送らない
@@ -41,7 +42,7 @@ ESP32 は位置の目印として **BLE ビーコン**を出しています（�
 **送らなくてよくなりました**（2026-11-22）。サーバーは読みません。装置の一覧・入退場の判定・通報は、すべて上の2つの表から作ります。
 - 装置の一覧: `wifi_reports_v2` と `ble_reports` に行がある装置
 - 位置の目印（入退場・エリアに使う上位2つ）: 直近 30 秒以内の BLE が見えていれば BLE、無ければ Wi-Fi
-- 通報: 最新の `wifi_reports_v2.report`
+- 通報: `wifi_reports_v2` と `ble_reports` の最新の行のうち、後から届いた方の `report`（空の行は使わない）
 
 今のウォッチが `wifi_reports` に書き込んでいても害はありません（表と列は残してあります）。新しい表だけに送るように直ったら、`wifi_reports` への書き込みを消してください。
 

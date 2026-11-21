@@ -87,7 +87,7 @@ ESP32-S3 ビーコン（BLE）──heartbeat──> /api/ap_heartbeat ──> S
 | エリアの決め方 | `build_area_layout` / `area_for_ratio` / `area_centers_m`、`estimate_positions` 内の優先順位 |
 | 火災の方向・距離・文言（ウォッチに出る文） | `fire_relation`（文言）、`build_fire_alerts`、定数 `FIRE_NEAR_SPACINGS` / `FIRE_DISTANCE_STEP_M` |
 | 入場・退場の判定 | `do_entry_status_update` |
-| 装置の一覧・通報・位置の目印（マップ・入退場・`/api/entry_status` の元） | `load_wifi_reports`（`wifi_reports_v2` / `ble_reports` から装置ごとの最新の状態を作る。BLE を優先する秒数 `LATEST_BLE_PRIORITY_SEC`）。通報を写すのは `sync_device_reports_from_wifi` |
+| 装置の一覧・通報・位置の目印（マップ・入退場・`/api/entry_status` の元） | `load_wifi_reports`（`wifi_reports_v2` / `ble_reports` から装置ごとの最新の状態を作る。BLE を優先する秒数 `LATEST_BLE_PRIORITY_SEC`）。通報をどちらの表から取るかは `report_of`（後から届いた方）、`device_instructions` に写すのは `sync_device_reports_from_wifi` |
 | オンライン判定の秒数 | `ONLINE_THRESHOLD_SEC`（ウォッチ）、`AP_NODE_ONLINE_SEC`（ESP32 AP） |
 | API を追加する | 既存の `@app.route` を真似る。管理画面用はログイン必須の `@login_required` を付ける。SPEC.md §5 の API 表に追記 |
 | テーブルを追加する | `supabase/新しい名前.sql` を作り、`app.py` 冒頭に `TABLE_XXX = "..."` を足す。SPEC.md §4 に追記 |
@@ -111,7 +111,7 @@ ESP32-S3 ビーコン（BLE）──heartbeat──> /api/ap_heartbeat ──> S
 ## 4. 守るルール
 
 - **ウォッチ（Galaxy Watch）側のコードはこのリポジトリに無い。** 次の列名・値・API の形はウォッチとの約束なので、**勝手に変えない**（変えるなら先に人間に確認）:
-  - テーブル `wifi_reports_v2`（`report` 列＝通報を含む）/ `ble_reports` / `area_status_v2` / `device_instructions` / `device_fire_alerts`（旧 `wifi_reports` / `latest_wifi_reports` はサーバーが読まないが、ウォッチが書くので消さない）
+  - テーブル `wifi_reports_v2` / `ble_reports`（どちらも `report` 列＝通報を含む）/ `area_status_v2` / `device_instructions` / `device_fire_alerts`（旧 `wifi_reports` / `latest_wifi_reports` はサーバーが読まないが、ウォッチが書くので消さない）
   - `device_fire_alerts.direction` の値 `inward / outward / near / unknown`
   - ログイン不要の API（`/api/area_status`、`/api/user`、`/api/area`、`/api/area_order`、`/api/entry_status`）
 - 位置推定は `estimate_positions` に**一本化**されている（マップ・区間の指示・入退場・火災通知が同じ結果を使う）。別の計算を足さない。

@@ -205,7 +205,9 @@ def main():
                 for w in walkers:
                     top = scan(w.x, ble_aps, BLE_P1M, BLE_N, BLE_NOISE, BLE_MIN)
                     if top:
-                        insert(appmod, appmod.TABLE_BLE_SCAN, scan_row(w.device_id, top, now_iso), args.dry_run)
+                        brow = scan_row(w.device_id, top, now_iso)
+                        brow['report'] = bool(args.report and w.device_id == f"{DEMO_PREFIX}01")   # 通報は両方の表に送る
+                        insert(appmod, appmod.TABLE_BLE_SCAN, brow, args.dry_run)
             if now - last_wifi >= args.wifi_sec:
                 last_wifi = now
                 for w in walkers:
