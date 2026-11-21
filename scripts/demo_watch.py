@@ -1,6 +1,6 @@
 """デモ用: ウォッチの代わりに、トンネルを歩く作業者のスキャン結果を Supabase に入れ続ける。
 
-本物のウォッチと同じ表（wifi_reports・wifi_reports_v2・ble_reports）に書くので、ダッシュボードのマップ・
+本物のウォッチと同じ表（wifi_reports_v2・ble_reports）に書くので、ダッシュボードのマップ・
 区間の指示・位置推定の比較がそのまま動く。**api/.env の Supabase（ふつうは本番）に書き込む**。
 デモ用の装置 ID は必ず「demo-」で始まり、--cleanup でまとめて消せる。
 
@@ -164,7 +164,8 @@ def main():
     ap.add_argument('--workers', type=int, default=2, help='歩く人数（既定 2）')
     ap.add_argument('--minutes', type=float, default=10, help='続ける時間（既定 10 分）')
     ap.add_argument('--ble-sec', type=float, default=1.0, help='BLE を送る間隔（既定 1 秒）')
-    ap.add_argument('--wifi-sec', type=float, default=5.0, help='Wi-Fi と今までの wifi_reports を送る間隔（既定 5 秒）')
+    ap.add_argument('--wifi-sec', type=float, default=5.0, help='Wi-Fi を送る間隔（既定 5 秒）')
+    ap.add_argument('--report', action='store_true', help='demo-01 を通報中にする（マップで赤く光る）')
     ap.add_argument('--no-ble', action='store_true', help='BLE を送らない（Wi-Fi だけの場面）')
     ap.add_argument('--auto-eval', action='store_true', help='15 秒ごとに本当の位置と推定を position_eval に記録')
     ap.add_argument('--dry-run', action='store_true', help='書き込まずに表示だけ（20 秒で終わる）')
@@ -209,17 +210,10 @@ def main():
                 last_wifi = now
                 for w in walkers:
                     wtop = scan(w.x, wifi_aps, WIFI_P1M, WIFI_N, WIFI_NOISE, WIFI_MIN) if wifi_aps else []
-                    if wtop:
-                        insert(appmod, appmod.TABLE_WIFI_SCAN, scan_row(w.device_id, wtop, now_iso), args.dry_run)
-                    # 今までの wifi_reports（装置の一覧・入退場のため。docs/WATCH_SCAN_REPORTS.md §2 の決まり）
-                    btop = scan(w.x, ble_aps, BLE_P1M, BLE_N, BLE_NOISE, -90.0) if ble_aps else []
-                    legacy = btop if btop else wtop
-                    if legacy:
-                        insert(appmod, appmod.TABLE_WIFI_LOG, {
-                            'device_id': w.device_id,
-                            'mac01': legacy[0][0],
-                            'mac02': legacy[1][0] if len(legacy) > 1 else None,
-                        }, args.dry_run)
+                    # Wi-Fi の行は AP が見えなくても送る（通報 report を運ぶため。docs/WATCH_SCAN_REPORTS.md）
+                    row = scan_row(w.device_id, wtop, now_iso)
+                    row['report'] = bool(args.report and w.device_id == f"{DEMO_PREFIX}01")
+                    insert(appmod, appmod.TABLE_WIFI_SCAN, row, args.dry_run)
             if now - last_print >= 10:
                 last_print = now
                 print(f"[{int(now - t0):4d}秒] " + "  ".join(f"{w.device_id} {w.x:5.0f}m" for w in walkers))

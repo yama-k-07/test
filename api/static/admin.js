@@ -236,12 +236,25 @@ const POSITION_SOURCE_LABELS = { wifi: 'Wi-Fi', ble: 'BLE', wifi_legacy: 'Wi-Fi�
 function positionMethodsHtml(worker) {
   const methods = worker.methods || {};
   const selected = lastWifiMapData?.position_method;
+  const sources = (worker.sources || []).map(s => POSITION_SOURCE_LABELS[s] || s).join('・');
+  // どの方式も値が無い＝直近のスキャンに登録済みの AP が無い（オフライン・AP の外など）。
+  // 「—」を並べても分からないので理由を書き、記録（サーバーも 409 で断る）も出さない
+  if (!Object.keys(POSITION_METHOD_SHORT).some(k => methods[k] !== null && methods[k] !== undefined)) {
+    const why = worker.approx
+      ? 'エリアの割当からおおよその場所に置いています。'
+      : '';
+    return `
+      <details class="worker-popup-methods">
+        <summary>推定の比較${sources ? `（${escapeHtml(sources)}）` : ''}</summary>
+        <p class="worker-popup-methods-empty">今は位置の数値が出せません。直近のスキャンに、距離の分かる AP（AP位置設定・ESP32 AP）が入っていません${worker.online === false ? '（ウォッチがオフライン）' : ''}。${why}</p>
+      </details>
+    `;
+  }
   const rows = Object.keys(POSITION_METHOD_SHORT).map(key => {
     const v = methods[key];
     const text = v === null || v === undefined ? '—' : `${Math.round(v)}m`;
     return `<tr class="${key === selected ? 'is-selected-method' : ''}"><td>${POSITION_METHOD_SHORT[key]}</td><td>${text}</td></tr>`;
   }).join('');
-  const sources = (worker.sources || []).map(s => POSITION_SOURCE_LABELS[s] || s).join('・');
   return `
     <details class="worker-popup-methods">
       <summary>推定の比較${sources ? `（${escapeHtml(sources)}）` : ''}</summary>
@@ -845,10 +858,17 @@ function initWifiMapRealtime() {
   const cfg = window.SUPABASE_CONFIG;
   if (!cfg || !cfg.url || !cfg.anonKey || !window.supabase) return;
 
+  // 2026-11-22 から wifi_reports_v2（Wi-Fi のスキャンと通報）に行が入ったらマップを読み直す。
+  // ble_reports は毎秒届くので見張らない（5 秒ごとの定期更新で反映）。続けて届いても 2 秒に 1 回まで。
+  // Supabase 側で wifi_reports_v2 の Realtime を有効にし、anon キーで読める必要がある（supabase/wifi_reports_v2_report.sql）
   const client = window.supabase.createClient(cfg.url, cfg.anonKey);
+  let last = 0;
   client
-    .channel('latest_wifi_reports-changes')
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'latest_wifi_reports' }, () => {
+    .channel('wifi_reports_v2-changes')
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'wifi_reports_v2' }, () => {
+      const now = Date.now();
+      if (now - last < 2000) return;
+      last = now;
       loadTunnelMap();
     })
     .subscribe();
@@ -1128,6 +1148,8 @@ function renderTunnelMap(data) {
     distance_m: w.distance_m,
     methods: w.methods,
     sources: w.sources,
+    approx: w.approx,
+    online: (data.online_device_ids || []).includes(w.device_id),
     cx: w.cx,
     cy: w.cy,
     r: R,

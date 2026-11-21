@@ -26,6 +26,8 @@ supabase: Client = create_client(url, key)
 TABLE_AREA_STATUS = "area_status_v2"
 # TABLE_AREA_ORDER = "ap_area_order"
 TABLE_USER = "user"
+# 旧: ウォッチの最初の送り先。2026-11-22 からサーバーは読まない（wifi_reports_v2 / ble_reports に移行）。
+# 列はウォッチが直るまで書き込みに使うので消さない。latest_wifi_reports はデバッグ API が読むだけ
 TABLE_WIFI_LOG = "wifi_reports"
 TABLE_WIFI_REPORTS = "latest_wifi_reports"
 TABLE_AP_POSITIONS = "ap_positions"
@@ -61,21 +63,58 @@ last_seen_dict = {}
 #  Supabase 連携データ処理関数
 # ==========================================
 
+# 装置ごとの「最新の状態」を作るときに読む行数（新しい順）。BLE は毎秒届くので直近だけ
+LATEST_WIFI_ROWS = 5000
+LATEST_BLE_WINDOW_SEC = 600
+# 最新の BLE のスキャンが最新のスキャンからこの秒数以内なら、位置の目印（mac01 / mac02）は BLE の上位2つ
+LATEST_BLE_PRIORITY_SEC = 30
+
+
 def load_wifi_reports():
-    """wifi_reports から device_id ごとの最新レコードを返す（同一APに複数デバイスがいても全員返す）"""
+    """装置ごとの最新の状態を返す（マップの装置の一覧・入退場・通報・/api/entry_status が使う）。
+    2026-11-22 から wifi_reports_v2（Wi-Fi のスキャンと通報）と ble_reports（BLE のスキャン）から作り、
+    旧 wifi_reports は読まない。各行の形は旧 wifi_reports の最新行と同じ:
+      device_id, created_at（最後にスキャンが届いた時刻）,
+      mac01 / mac02（直近の BLE が見えていれば BLE の上位2つ、無ければ Wi-Fi の上位2つ）,
+      report（最新の wifi_reports_v2.report）"""
     try:
-        response = supabase.table(TABLE_WIFI_LOG).select("*").order("id", desc=True).execute()
-        seen = set()
-        result = []
-        for row in (response.data or []):
-            did = row.get('device_id')
-            if did and did not in seen:
-                seen.add(did)
-                result.append(row)
-        return result
+        wifi_rows = (supabase.table(TABLE_WIFI_SCAN).select("*")
+                     .order("id", desc=True).limit(LATEST_WIFI_ROWS).execute().data or [])
     except Exception as e:
-        print(f"Error loading wifi_reports: {e}")
-        return []
+        print(f"Error loading {TABLE_WIFI_SCAN}: {e}")
+        wifi_rows = []
+    since = (datetime.now(timezone.utc) - timedelta(seconds=LATEST_BLE_WINDOW_SEC)).isoformat()
+    try:
+        ble_rows = (supabase.table(TABLE_BLE_SCAN).select("*").gte("created_at", since)
+                    .order("id", desc=True).limit(LATEST_WIFI_ROWS).execute().data or [])
+    except Exception as e:
+        print(f"Error loading {TABLE_BLE_SCAN}: {e}")
+        ble_rows = []
+
+    latest_wifi, latest_ble = {}, {}
+    for rows, into in ((wifi_rows, latest_wifi), (ble_rows, latest_ble)):
+        for row in rows:   # 新しい順なので、装置ごとに最初の行が最新
+            did = row.get('device_id')
+            if did and did not in into:
+                into[did] = row
+
+    result = []
+    for did in sorted(set(latest_wifi) | set(latest_ble)):
+        w, b = latest_wifi.get(did), latest_ble.get(did)
+        tw = parse_ts((w or {}).get('created_at'))
+        tb = parse_ts((b or {}).get('created_at'))
+        newest = max([t for t in (tw, tb) if t is not None], default=None)
+        use_ble = b is not None and b.get('mac01') and tb is not None and newest is not None \
+            and (newest - tb).total_seconds() <= LATEST_BLE_PRIORITY_SEC
+        marks = b if use_ble else (w or b)
+        result.append({
+            'device_id': did,
+            'created_at': newest.isoformat() if newest else (w or b).get('created_at'),
+            'mac01': marks.get('mac01'),
+            'mac02': marks.get('mac02'),
+            'report': bool((w or {}).get('report')),
+        })
+    return result
 
 
 def load_ap_positions():
@@ -187,8 +226,8 @@ def load_device_instructions():
 
 
 def sync_device_reports_from_wifi(reports):
-    """wifi_reports.report を device_instructions.report に同期する
-    （デバイス側の書き込み先移行が完了するまでの橋渡し）。
+    """通報（load_wifi_reports の report ＝ 最新の wifi_reports_v2.report）を device_instructions.report に写す。
+    マップはこの値で通報中の作業者を赤く光らせる。
     値が実際に変化したデバイスだけ upsert し、device_id -> device_instructions行 の辞書を返す。"""
     instr_map = {d['device_id']: d for d in load_device_instructions() if d.get('device_id')}
 
@@ -408,24 +447,6 @@ def smooth_distance_m(samples, outlier_m):
     return sum(d * w for d, w in kept) / total
 
 
-def load_recent_wifi_reports(window_sec=SMOOTHING_WINDOW_SEC * 2):
-    """平滑化用に直近 window_sec 秒の wifi_reports を新しい順で返す"""
-    since = (datetime.now(timezone.utc) - timedelta(seconds=window_sec)).isoformat()
-    try:
-        response = (
-            supabase.table(TABLE_WIFI_LOG)
-            .select("device_id, mac01, mac02, created_at")
-            .gte("created_at", since)
-            .order("id", desc=True)
-            .limit(1000)
-            .execute()
-        )
-        return response.data or []
-    except Exception as e:
-        print(f"Error loading recent wifi_reports: {e}")
-        return []
-
-
 # ==========================================
 #  位置推定の方式（①〜④）
 # ==========================================
@@ -631,7 +652,8 @@ def load_recent_scan_reports(table, window_sec):
 
 
 def load_recent_scans():
-    """device_id → スキャンのリスト（新しい順）。新しい表に行がある装置は、旧 wifi_reports を使わない（二重に数えない）"""
+    """device_id → スキャンのリスト（新しい順）。wifi_reports_v2 と ble_reports から（旧 wifi_reports は 2026-11-22 から読まない）。
+    戻り値の 2 つ目は、以前の旧 wifi_reports 用の入れ物（今は常に空）"""
     window = max(SMOOTHING_WINDOW_SEC, SERIES_WINDOW_SEC) * 2
     new_scans = (_scan_rows_to_scans(load_recent_scan_reports(TABLE_WIFI_SCAN, window), 'wifi', True)
                  + _scan_rows_to_scans(load_recent_scan_reports(TABLE_BLE_SCAN, window), 'ble', True))
@@ -639,13 +661,9 @@ def load_recent_scans():
     for sc in new_scans:
         if sc['device_id']:
             by_device.setdefault(sc['device_id'], []).append(sc)
-    legacy = {}
-    for sc in _scan_rows_to_scans(load_recent_wifi_reports(window), 'wifi', False):
-        if sc['device_id'] and sc['device_id'] not in by_device:
-            legacy.setdefault(sc['device_id'], []).append(sc)
     for scans in by_device.values():
         scans.sort(key=lambda sc: sc['t'], reverse=True)
-    return by_device, legacy
+    return by_device, {}
 
 
 def estimate_methods(scans, ap_map, ref_t):
@@ -731,9 +749,9 @@ def estimate_positions(latest_reports, ap_map, area_order, area_rows, method=Non
         methods は ①〜④ すべての距離（比較用）。distance_m / ratio / area_id は method（既定は画面で選んだ方式）のもの
       layout: build_area_layout の結果
 
-    使うスキャン: 新しい表（wifi_reports_v2 / ble_reports、RSSI 付き）に行がある装置はそれだけ、
-    無い装置は旧 wifi_reports（RSSI なし。① と ③、② と ④ は同じ値になる）。
-    装置の一覧は latest_reports（旧 wifi_reports の最新行）。
+    使うスキャン: wifi_reports_v2 / ble_reports（RSSI 付き）の直近 2 分。
+    装置の一覧は latest_reports（load_wifi_reports が新しい表から作る、装置ごとの最新の状態）。
+    直近 2 分にスキャンが無い装置（オフラインなど）は、最新の状態の mac01 / mac02 から最後の位置を出す。
 
     エリアの決め方（上ほど優先）:
       1. 全エリアの BSSID の距離が分かる → 推定した距離に最も近いエリア

@@ -1306,3 +1306,19 @@ input[type="checkbox"]:checked {
 .box:has(.card-help[open]) {
   z-index: auto;
 }
+
+/* 作業者・区間のポップアップ: 「推定の比較」を開いて長くなっても、下の欄の裏に隠れないように
+   （欄はそれぞれ重なりの順番を持つので、ポップアップを開いている間はマップの欄ごと前に出す） */
+.box:has(.worker-popup:not([hidden])) {
+  position: relative;
+  z-index: 50;
+}
+.worker-popup {
+  max-height: 70vh;
+  overflow-y: auto;
+}
+.worker-popup-methods-empty {
+  font-size: 13px;
+  margin: 4px 0 0;
+  color: var(--ink-sub);
+}
