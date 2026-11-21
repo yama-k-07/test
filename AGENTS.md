@@ -101,6 +101,7 @@ ESP32-S3 ビーコン（BLE）──heartbeat──> /api/ap_heartbeat ──> S
 | BLE ビーコンの名前・出力・間隔 | `esp32s3_ap.ino` の `startBleBeacon`（カメラは `esp32cam_uplink.ino` の同名関数）。名前の頭 `MAMOTCHI-` はウォッチとの約束 |
 | 従来の Wi-Fi softAP | `esp32s3_ap.ino` の `startWifiAccessPoint`（`ENABLE_WIFI_AP 1` のときだけ） |
 | heartbeat の内容・間隔 | `esp32s3_ap.ino` の `sendHeartbeat` / `HEARTBEAT_INTERVAL_MS`（サーバー側 `ap_heartbeat` と項目を揃える） |
+| ESP32（ビーコン・カメラ）を新しく足す | コード変更は不要。手順は docs/AI_WORKFLOW.md §6（書き込み → ダッシュボードで距離を入れる） |
 | カメラを増やす・カメラごとの設定 | `firmware/esp32cam_uplink/configs/<カメラID>.h`（1台ごと）と `configs/common.h`（共通）。書き込みは `python scripts/flash_camera.py <カメラID> <ポート>`（`scripts/flash_camera.py`） |
 | カメラの画像サイズ・画質・送り方 | `firmware/esp32cam_uplink/config.h` の `FRAME_SIZE` / `JPEG_QUALITY`、`esp32cam_uplink.ino` の `initCamera` / `sendFrame` / `sendPoll`。ピンは CameraWebServer からコピーした `board_config.h` / `camera_pins.h` |
 

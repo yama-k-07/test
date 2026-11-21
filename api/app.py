@@ -573,10 +573,31 @@ def series_distance_m(points, ap_map):
     return x
 
 
+# scanned_at（ウォッチの時計）が届いた時刻 created_at（サーバーの時計）より、この秒数以上「後」なら、
+# または SCAN_TIME_MAX_DELAY_SEC 以上「前」なら、時計かタイムゾーンの間違いとみなして created_at を使う。
+# 例: ウォッチがタイムゾーン無しで日本時間を送ると、DB は UTC とみなすので 9 時間先になる。
+#     そのままだと、時刻の無い行（created_at で代用）と 9 時間離れて見え、片方がまるごと捨てられていた（2026-11-21 に修正）。
+SCAN_TIME_MAX_AHEAD_SEC = 30
+SCAN_TIME_MAX_DELAY_SEC = 3600
+
+
+def scan_time(row):
+    """スキャンした時刻。scanned_at が無い・読めない・おかしければ created_at"""
+    t_scan = parse_ts(row.get('scanned_at'))
+    t_recv = parse_ts(row.get('created_at'))
+    if t_scan is None:
+        return t_recv
+    if t_recv is not None:
+        lag = (t_recv - t_scan).total_seconds()   # 正: スキャンしてから届くまで
+        if lag < -SCAN_TIME_MAX_AHEAD_SEC or lag > SCAN_TIME_MAX_DELAY_SEC:
+            return t_recv
+    return t_scan
+
+
 def _scan_rows_to_scans(rows, source, with_rssi):
     scans = []
     for row in rows or []:
-        t = parse_ts(row.get('scanned_at')) or parse_ts(row.get('created_at'))
+        t = scan_time(row)
         if t is None:
             continue
         aps = []

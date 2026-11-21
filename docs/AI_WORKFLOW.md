@@ -171,7 +171,72 @@ git push -u origin feature/やること
 
 ---
 
-## 6. なぜこのやり方なのか
+## 6. ESP32 を足す（ビーコン・カメラ）
+
+新しい ESP32 を足すときは**コードを変えない**。ファームウェアを書き込んで、ダッシュボードで距離を入れるだけ。PR も要らない。
+
+### 6-1. 最初に1回だけ
+1. リポジトリを clone（または `git pull` で最新に）
+2. Arduino IDE の「ボードマネージャ」で **esp32 by Espressif Systems** を入れる
+3. オーナーから次を**チャット以外で**受け取る（メッセージやメールに残さない方法で）
+   - `AP_SHARED_TOKEN`（ESP32 がサーバーに通信するためのトークン）
+   - 現場のインターネット用 Wi-Fi の名前とパスワード
+
+### 6-2. 位置の目印（BLE ビーコン）を足す — `firmware/esp32s3_ap/`
+1. `firmware/esp32s3_ap/config.example.h` をコピーして、同じフォルダに `config.h` を作り、書き換える
+
+   | 項目 | 書くこと |
+   |---|---|
+   | `AP_LABEL` | 表示名。英数字 17 文字まで（例 `A250` = 250m 地点）。**ほかの ESP32 と重ねない** |
+   | `AP_DISTANCE_M` | 入口からの距離 [m]（初期値。あとで画面で直せる） |
+   | `BLE_TX_POWER` | **全台同じ値**（既定の +3dBm のまま） |
+   | `UPLINK_SSID` / `UPLINK_PASSWORD` / `AP_TOKEN` | 6-1 で受け取った Wi-Fi とトークン |
+
+2. Arduino IDE で書き込む
+   - ボード: **ESP32S3 Dev Module**
+   - Partition Scheme: **Huge APP (3MB No OTA/1MB SPIFFS)**（BLE と Wi-Fi で標準の領域をほぼ使い切るため）
+3. シリアルモニタ（115200bps）で確かめる
+   - `[BLE] name=MAMOTCHI-A250  address=…` … ビーコンが動いている（`address` が位置推定で使う MAC）
+   - `[HB] POST … -> 200` … サーバーに登録された
+4. ダッシュボードの「**ESP32 AP**」欄（設定の下）に 30 秒ほどで行が出る。**入口からの距離**を確かめて「保存」。距離が空の行は位置推定に使われない
+5. 設置した場所に立ち、マップの位置が合うか確かめる
+
+**インターネットにつなげない場所の ESP32**: `UPLINK_SSID` を `""` のまま書き込み、シリアルに出た `address=…` を「ESP32 AP」欄の下の「**手で追加**」で登録する（種類は BLE、距離も入れる）。
+
+### 6-3. カメラを足す — `firmware/esp32cam_uplink/`
+1. CameraWebServer からコピーするファイル（`board_config.h`・`camera_pins.h`・`partitions.csv`・`app_httpd.cpp`・`camera_index.h`）がフォルダにあるか確かめる。無ければ `firmware/esp32cam_uplink/README.md` の手順で用意する（Git には入っていない）
+2. 共通の設定 `configs/common.h` が無ければ、`configs/common.example.h` をコピーして作る（Wi-Fi・トークンなど）
+3. `configs/camera.example.h` をコピーして `configs/<カメラID>.h` を作り（例 `cam-03.h`）、4つだけ書き換える
+
+   | 項目 | 書くこと |
+   |---|---|
+   | `CAMERA_ID` | ファイル名と同じ。英数字・`_`・`-` で 17 文字まで。**ほかのカメラと重ねない** |
+   | `CAMERA_LABEL` | 画面に出る名前 |
+   | `CAMERA_DISTANCE_M` | 入口からの距離 [m]（初期値） |
+   | `LOCAL_AP_SSID` | 近くで見るための Wi-Fi の名前。ほかのカメラと重ねない |
+
+4. 書き込む（リポジトリのいちばん上で。ポートは `--list` で確かめる）
+   ```bash
+   python scripts/flash_camera.py --list
+   ```
+   ```bash
+   python scripts/flash_camera.py cam-03 COM9
+   ```
+5. ダッシュボードの「カメラ」欄と「ESP32 AP」欄に出るので、距離を入れる（どちらの欄で入れても同じ値になる）。「映像を見る」で映るか確かめる
+6. **基板にカメラ ID のシールを貼る**（どのボードがどのカメラか、見た目では分からないため）
+
+**映像の見分け方**: どのカメラの映像かは **カメラ ID（`CAMERA_ID`）** で決まる。MAC（BLE アドレス）は、カメラと「ESP32 AP」欄の行（位置の目印）を結び付けるだけに使う。同じカメラ ID のボードが2台あると、映像が上書きし合って混ざる（`flash_camera.py` は設定ファイルどうしの重なりは止めるが、別の PC で同じ ID を使った場合は防げない）。実物の ID は、USB でつないだときのシリアルの最初の行 `=== MAMOTCHI ESP32 camera fw … (cam-03) ===` で分かる。
+
+### 6-4. 気をつけること
+- **`config.h` と `configs/*.h` はコミットしない**（パスワードとトークン入り。`.gitignore` で除いてあるが、`git status` で確かめる）。トークンもチャットに貼らない
+- 表示名・カメラ ID・近くで見る Wi-Fi の名前は、ほかの ESP32 と重ねない
+- 取り外した ESP32 は「ESP32 AP」欄で「使わない」にするか「削除」する（そのままだとマップに停止中の灰色の × が残る）
+- ビーコンが位置推定に効くのは、ウォッチが BLE を送るようになってから（[WATCH_SCAN_REPORTS.md](./WATCH_SCAN_REPORTS.md)）
+- ファームウェアそのもの（`.ino`）を直したときは、普通の変更と同じく §4 の流れ（ブランチ → PR）で入れる
+
+---
+
+## 7. なぜこのやり方なのか
 
 - `AGENTS.md` は多くの AI 開発ツールが共通で読むファイル名。1か所に書けば、どの AI にも同じ説明が届く
   （Claude Code 用の `CLAUDE.md` も中身は AGENTS.md を読み込むだけにしてある）
