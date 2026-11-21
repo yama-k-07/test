@@ -389,7 +389,8 @@
 - **読み込み時**（`DOMContentLoaded`）に全セクションを1回読む。トンネルマップのクリック操作と Realtime 購読もここで始める。
 - 「エリアごとの状態」のカード（`loadAreaBoard` / `createAreaCard`、SortableJS の並べ替え）は 2026-11-20 に削除し、AP の区間ごとの指示（§7.4）に置き換えた。`/api/area_status` などのログイン不要 API はウォッチのために残している。
 - 「エリア割当設定」の表（`loadAreaMapTable` ほか）は 2026-11-21 に削除した。エリアの BSSID の割当（`area_status_v2.bssid`）は DB と `/api/area` に残り、位置推定のエリアの決め方（§6.4）と入退場のエリアには今も使われる。変えるときは Supabase の画面か API で。
-- **使い方**：どの欄も見出しの右に「? 使い方」（`<details class="card-help">`）があり、押すと説明が重なって開く。閉じているときは高さを取らない。開いている欄は前面に出す（`.box:has(.card-help[open])`）。
+- **使い方**：どの欄も見出しの右に「? 使い方」（`<details class="card-help">`）があり、押すとその欄の中で説明が下に広がる（下の欄を押し下げ、ほかの欄とは重ならない。2026-11-22〜）。
+- **並び**：すべての欄を縦 1 列に並べる（画面が広くても横に並べない）。欄と欄の間は 56px（`style.css` 末尾の「2026-11-22 縦長レイアウト」）。
 - **5 秒ごと**（`setInterval`）に `loadUserTable`、`loadEntryManagement`、`loadApNodesTable`、`loadCameras`、`loadPositionSettings`、`loadPositionEval`、`loadTunnelMap` を呼ぶ。AP位置設定とプリセット一覧は読み込み時だけ。
 - **Realtime**：anon key で `latest_wifi_reports` の変更を購読し、変更が来たら `loadTunnelMap()`。Supabase 側で Realtime が有効でないと何も起きない（エラーにもならない）。
 - **ちらつき防止**：表やカードは、前回の応答（`JSON.stringify`）を `last*Sig` に覚えておき、同じなら描き直さない。マップは毎回描き直す。
@@ -622,6 +623,7 @@
 | 2026-10-11 | #25 | マップから個別指示、位置推定の一本化と平滑化、UI 改善、火災位置の通知、ログイン画面、仕様書・CodeQL 指摘の修正 |
 | 2026-11-11 | #26 | AP を 100m 間隔に修正、`ApMap`、ESP32-S3 AP（heartbeat・管理画面・ファームウェア）、AGENTS.md ほか開発支援。**本番デプロイは失敗中** |
 | 2026-11-18 | #28〜#30 | ESP32 カメラ（外から見るコマ送り、RGB565→JPEG 変換）、カメラが位置の目印を兼ね距離を ESP32 AP 表と連動 |
+| 2026-11-22 | — | 画面を縦長に（全欄を縦 1 列、欄の間 56px）。「使い方」は欄の中で広げて、ほかの欄と重ならないように |
 | 2026-11-21 | — | エリア割当設定の欄を削除。AP位置設定を「MAC と距離（番号は自動）」に（`ap_positions.distance_m`）。ESP32 AP を画面から追加。全部の欄に折りたためる「使い方」 |
 | 2026-11-20 | — | 位置推定の欄をマップの真上、ESP32 AP 欄を設定の下へ。位置推定 ⑥（Wi-Fi と BLE を合わせる）、⑤ の探す範囲を前後1区間に、`SERIES_WALK_MPS` 3.0。デモ用 `scripts/demo_watch.py` |
 | 2026-11-20 | — | エリアカードを削除し、AP の区間ごとの指示（個別指示として送る）に。マップの点線を AP の区間に。ESP32 AP 欄をマップの真上に（1366×768 でスクロールせずに両方見える）。位置推定 ⑤（Wi-Fi だけ・上位3つの当てはめ） |
