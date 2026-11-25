@@ -117,8 +117,10 @@ last_seen_dict = {}
 # 装置ごとの「最新の状態」を作るときに読む行数（新しい順）。BLE は毎秒届くので直近だけ
 LATEST_WIFI_ROWS = 5000
 LATEST_BLE_WINDOW_SEC = 600
-# 最新の BLE のスキャンが最新のスキャンからこの秒数以内なら、位置の目印（mac01 / mac02）は BLE の上位2つ
-LATEST_BLE_PRIORITY_SEC = 30
+# 最新の BLE のスキャンが最新のスキャンからこの秒数以内なら、位置の目印（mac01 / mac02）は BLE の上位2つ。
+# ウォッチは BLE も Wi-Fi も約 30 秒ごとに送る（2026-11-25 の実証実験）ので、BLE を 1 回取りこぼしても
+# Wi-Fi に切り替わらないように 30 → 45 秒
+LATEST_BLE_PRIORITY_SEC = 45
 
 
 def report_of(wifi_row, wifi_t, ble_row, ble_t):
@@ -544,12 +546,13 @@ SOURCE_WEIGHT = {'wifi': 1.0, 'ble': 1.0}
 SOURCE_SIGMA_SPACINGS = {'wifi': 0.35, 'ble': 0.25}
 
 # ②④: カルマンフィルタ（1次元、位置だけ）。人の速さを超える飛びは捨てる。
-SERIES_WINDOW_SEC = 60        # この秒数分のスキャンを使う
+SERIES_WINDOW_SEC = 180       # この秒数分のスキャンを使う（ウォッチは約 30 秒ごとに送るので、60 秒だと 2〜4 回分しかならせない。2026-11-25 に 60 → 180）
 SERIES_MAX_SAMPLES = 60
-SERIES_WALK_MPS = 3.0         # 位置のゆらぎ [m/s]。人の歩く速さより大きめにして遅れを減らす（1.5 → 3.0 でシミュレーションの誤差が減った）
+SERIES_WALK_MPS = 0.5         # 位置のゆらぎ [m/s]。作業員はほぼ止まっている（歩きは 25m/20 秒）ので 3.0 → 0.5。2026-11-25 の実証実験の CSV を流し込むと、止まっている人の区間の切り替えが 17 分で 46 回 → 6 回、ばらつき 13.7m → 8.6m（SPEC §10）
 SERIES_MAX_SPEED_MPS = 3.0    # これを超える速さでしか説明できない飛びは捨てる [m/s]
 SERIES_GATE_SIGMA = 3.0       # 予測から 3σ を超えた値は捨てる
-SERIES_RESET_AFTER = 3        # 続けてこの回数捨てたら、本当に動いたとみなして新しい値から始め直す
+SERIES_RESET_SEC = 4.0        # 捨てた値がこの秒数続いたら、本当に動いた（車など）とみなして新しい値から始め直す
+SERIES_RESET_MIN = 2          # ただし続けて 2 回以上捨てたときだけ（1 回の飛びでは動かない）
 
 # ⑤: Wi-Fi のスキャンだけを使い、上位3つの RSSI すべてに距離減衰の式を当てはめる（③ のように2つの間に置くのではない）。
 #   トンネル上の各地点 x について、AP i までの距離 r_i = √((x − d_i)² + 高さ²) から
@@ -634,6 +637,7 @@ def series_distance_m(points, ap_map):
     x = P = None
     last_t = None
     rejected = 0
+    first_rejected_t = None
     for t, z, source in points:
         R = (SOURCE_SIGMA_SPACINGS.get(source, 0.35) * ap_map.spacing) ** 2
         if x is None:
@@ -645,8 +649,11 @@ def series_distance_m(points, ap_map):
         S = P_pred + R
         too_far = innov * innov > (SERIES_GATE_SIGMA ** 2) * S and abs(innov) > SERIES_MAX_SPEED_MPS * dt + ap_map.spacing * 0.5
         if too_far:
+            # 回数でなく秒数で数える（BLE は 1 秒ごと、Wi-Fi は 5 秒ごとに届くので、回数だと追いつく早さが変わる）
+            if rejected == 0:
+                first_rejected_t = t
             rejected += 1
-            if rejected < SERIES_RESET_AFTER:
+            if rejected < SERIES_RESET_MIN or t - first_rejected_t < SERIES_RESET_SEC:
                 continue
             x, P, last_t, rejected = z, R, t, 0   # 続けて外れる＝本当に動いた
             continue
@@ -679,6 +686,13 @@ def scan_time(row):
     return t_scan
 
 
+# ウォッチが送る値のうち、空として扱うもの（2026-11-25 の実証実験の CSV から）:
+#   見つからなかった欄が mac「該当なし」・rssi 0 で届く（約束は null）→ MAC の形でない欄は捨てる
+#   RSSI がこれより強い値（-13・-9dBm など）はトンネルではありえない → その AP は捨てる
+RSSI_MAX_PLAUSIBLE = -30
+_SCAN_MAC_RE = re.compile(r'^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$')
+
+
 def _scan_rows_to_scans(rows, source, with_rssi):
     scans = []
     for row in rows or []:
@@ -688,9 +702,11 @@ def _scan_rows_to_scans(rows, source, with_rssi):
         aps = []
         for i in ('01', '02', '03'):
             mac = row.get(f'mac{i}')
-            if not mac:
+            if not mac or not _SCAN_MAC_RE.match(str(mac).strip()):
                 continue
             rssi = row.get(f'rssi{i}') if with_rssi else None
+            if isinstance(rssi, (int, float)) and rssi > RSSI_MAX_PLAUSIBLE:
+                continue
             aps.append((mac, rssi if isinstance(rssi, (int, float)) else None))
         if with_rssi:
             aps.sort(key=lambda a: -(a[1] if a[1] is not None else -999))   # 念のため強い順に並べ直す
@@ -1432,6 +1448,10 @@ CAMERA_IDLE_POLL_SEC = 10        # 誰も見ていない間、カメラが問い
 CAMERA_FRAME_INTERVAL_MS = 1000  # 見られている間、カメラが送る間隔
 CAMERA_ONLINE_SEC = 60           # last_seen がこの秒数以内なら「稼働中」
 CAMERA_MAX_FRAME_BYTES = 600 * 1024
+# 診断（2026-11-25〜、supabase/camera_diagnostics.sql）: カメラが送る項目（firmware 1.5.0〜）と、サーバーが数える項目
+CAMERA_DIAG_INT_FIELDS = ('uptime_s', 'wifi_reconnects', 'free_heap', 'min_free_heap', 'http_fails')
+CAMERA_DIAG_COLUMNS = CAMERA_DIAG_INT_FIELDS + ('reset_reason', 'restarts', 'last_restart_at',
+                                                'offline_count', 'last_offline_at', 'last_offline_sec')
 _CAMERA_ID_RE = re.compile(r'^[A-Za-z0-9_-]{1,32}$')
 
 
@@ -1490,6 +1510,7 @@ def camera_poll():
     ap_mac = str(data.get('ap_mac') or '').upper()
     if _MAC_RE.match(ap_mac):
         payload['ap_mac'] = ap_mac   # このカメラが兼ねている AP（距離は ap_nodes と連動させる）
+    payload.update(camera_diagnostics(row, data))
     if row is None:
         payload['label'] = str(data.get('label') or '')[:32] or camera_id
         d = data.get('distance_m')
@@ -1499,16 +1520,50 @@ def camera_poll():
         try:
             supabase.table(TABLE_CAMERAS).upsert(payload).execute()
         except Exception as e:
-            if 'ap_mac' not in payload:
-                raise
-            # supabase/cameras.sql の ap_mac 列をまだ足していない DB でも動かす
-            print(f"camera poll without ap_mac ({camera_id}): {e}")
-            payload.pop('ap_mac')
-            supabase.table(TABLE_CAMERAS).upsert(payload).execute()
+            # 後から足した列（診断・ap_mac）がまだ無い DB でも動かす。新しい列から順に外して保存し直す
+            print(f"camera poll retry without newer columns ({camera_id}): {e}")
+            for k in CAMERA_DIAG_COLUMNS:
+                payload.pop(k, None)
+            try:
+                supabase.table(TABLE_CAMERAS).upsert(payload).execute()
+            except Exception:
+                if 'ap_mac' not in payload:
+                    raise
+                payload.pop('ap_mac')
+                supabase.table(TABLE_CAMERAS).upsert(payload).execute()
     except Exception as e:
         print(f"Error saving camera poll {camera_id}: {e}")
         return jsonify({'error': 'カメラ情報の保存に失敗しました（supabase/cameras.sql は実行済みですか？）'}), 500
     return jsonify(camera_instruction(row or payload))
+
+
+def camera_diagnostics(row, data):
+    """camera_poll で保存する診断の項目。カメラが送った値（firmware 1.5.0〜）に加えて、サーバーが次を数える:
+    - restarts / last_restart_at: 起動してからの秒数（uptime_s）が前回より減った＝再起動した回数と時刻
+    - offline_count / last_offline_at / last_offline_sec: 前回の連絡から CAMERA_ONLINE_SEC より空いた＝
+      「停止」と表示された回数・途切れ始めた時刻・途切れていた秒数（古い firmware でも数えられる）"""
+    row = row or {}
+    out = {}
+    for k in CAMERA_DIAG_INT_FIELDS:
+        v = data.get(k)
+        if isinstance(v, int) and not isinstance(v, bool) and v >= 0:
+            out[k] = v
+    reason = str(data.get('reset_reason') or '')[:16]
+    if reason:
+        out['reset_reason'] = reason
+    now = datetime.now(timezone.utc)
+    prev_up = row.get('uptime_s')
+    if isinstance(prev_up, int) and 'uptime_s' in out and out['uptime_s'] < prev_up:
+        out['restarts'] = (row.get('restarts') or 0) + 1
+        out['last_restart_at'] = (now - timedelta(seconds=out['uptime_s'])).isoformat()
+    last_seen = parse_ts(row.get('last_seen'))
+    if last_seen is not None:
+        gap = (now - last_seen).total_seconds()
+        if gap > CAMERA_ONLINE_SEC:
+            out['offline_count'] = (row.get('offline_count') or 0) + 1
+            out['last_offline_at'] = last_seen.isoformat()
+            out['last_offline_sec'] = int(gap)
+    return out
 
 
 @app.route('/api/camera_frame', methods=['POST'])
@@ -1675,7 +1730,8 @@ def get_wifi_map():
     # AP の区間の指示: 区間に入ったウォッチに送る（送ったら instruction_map も新しくする）
     segments = ap_segments(ap_map)
     seg_rows = load_segment_instructions()
-    if apply_segment_instructions(positions, segments, seg_rows):
+    seg_where = {}
+    if apply_segment_instructions(positions, segments, seg_rows, where=seg_where):
         instruction_map = {r['device_id']: r for r in load_device_instructions() if r.get('device_id')}
 
     workers = []
@@ -1709,7 +1765,7 @@ def get_wifi_map():
         'area_layout': layout,
         'online_device_ids': online_device_ids,
         'position_method': positions_method(positions),
-        'segments': segments_with_instructions(segments, seg_rows, positions),
+        'segments': segments_with_instructions(segments, seg_rows, positions, where=seg_where),
         'fire': {
             'active': fire['active'],
             'distance_m': fire['distance_m'],
@@ -1736,9 +1792,22 @@ def ap_segments(ap_map):
     return out
 
 
-def segment_for_distance(segments, distance_m):
+# 区間の切り替えに持たせる余裕（区間の長さに対する割合）。前にいた区間の外へ、この分より多く出たときだけ切り替える。
+# 作業員はほとんどその場から動かないので、境目の近くにいる人の推定が少し揺れただけで、区間の出入り（指示の送り直し）が
+# くり返されないようにする（2026-11-25、現地の調査から）。
+SEGMENT_HYSTERESIS = 0.2   # 25m の区間なら 5m
+
+
+def segment_for_distance(segments, distance_m, prev_key=None):
+    """距離 → 区間。prev_key（前にいた区間）があれば、その区間の外へ SEGMENT_HYSTERESIS より多く出るまで同じ区間のまま"""
     if not segments or distance_m is None:
         return None
+    if prev_key:
+        prev = next((seg for seg in segments if seg['key'] == prev_key), None)
+        if prev is not None:
+            margin = SEGMENT_HYSTERESIS * (prev['end_m'] - prev['start_m'])
+            if prev['start_m'] - margin <= distance_m <= prev['end_m'] + margin:
+                return prev
     for seg in segments:
         if distance_m < seg['end_m']:
             return seg
@@ -1774,8 +1843,9 @@ def send_segment_instruction(device_id, seg_key, row, now):
     }).execute()
 
 
-def apply_segment_instructions(positions, segments, seg_rows=None):
+def apply_segment_instructions(positions, segments, seg_rows=None, where=None):
     """区間に入ったウォッチに、その区間の指示を送る（GET /api/wifi_map から毎回呼ぶ。変化があったときだけ書く）。
+    where に辞書を渡すと、device_id → いまいる区間の key を入れて返す（画面の「いる人」に使う）。
     戻り値: 送った device_id の集合"""
     seg_rows = load_segment_instructions() if seg_rows is None else seg_rows
     if not segments:
@@ -1784,11 +1854,13 @@ def apply_segment_instructions(positions, segments, seg_rows=None):
     now = now_iso()
     sent = set()
     for did, pos in (positions or {}).items():
-        seg = segment_for_distance(segments, pos.get('distance_m'))
+        state = states.get(did) or {}
+        seg = segment_for_distance(segments, pos.get('distance_m'), state.get('segment_key'))
         if seg is None:
             continue
+        if where is not None:
+            where[did] = seg['key']
         row = seg_rows.get(seg['key'])
-        state = states.get(did) or {}
         moved = state.get('segment_key') != seg['key']
         changed = row is not None and state.get('segment_updated_at') != row.get('updated_at')
         try:
@@ -1806,12 +1878,18 @@ def apply_segment_instructions(positions, segments, seg_rows=None):
     return sent
 
 
-def segments_with_instructions(segments, seg_rows, positions):
+def segments_with_instructions(segments, seg_rows, positions, where=None):
+    """区間の一覧（指示といるウォッチ付き）。where（device_id → 区間の key）が無ければ、前にいた区間を読んで決める"""
+    if where is None:
+        states = load_device_segment_state() if segments else {}
+        where = {}
+        for did, pos in (positions or {}).items():
+            seg = segment_for_distance(segments, pos.get('distance_m'), (states.get(did) or {}).get('segment_key'))
+            if seg:
+                where[did] = seg['key']
     by_seg = {}
-    for did, pos in (positions or {}).items():
-        seg = segment_for_distance(segments, pos.get('distance_m'))
-        if seg:
-            by_seg.setdefault(seg['key'], []).append(did)
+    for did, key in where.items():
+        by_seg.setdefault(key, []).append(did)
     return [dict(seg, instruction=(seg_rows.get(seg['key']) or {}).get('instruction') or 'none',
                  device_ids=sorted(by_seg.get(seg['key'], []))) for seg in segments]
 
@@ -1841,8 +1919,9 @@ def handle_segment_instructions():
     try:
         supabase.table(TABLE_SEGMENT_INSTRUCTIONS).upsert(row).execute()
         sent = []
+        states = load_device_segment_state()
         for did, pos in positions.items():
-            here = segment_for_distance(segments, pos.get('distance_m'))
+            here = segment_for_distance(segments, pos.get('distance_m'), (states.get(did) or {}).get('segment_key'))
             if here and here['key'] == key:
                 send_segment_instruction(did, key, row, now)   # 区間に指示を出したときは「なし」も送る
                 sent.append(did)

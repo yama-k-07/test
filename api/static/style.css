@@ -1332,3 +1332,10 @@ input[type="checkbox"]:checked {
   -webkit-backdrop-filter: none;
   background: rgba(255, 255, 255, 0.88);
 }
+
+/* カメラの設定の「診断」欄（2026-11-25） */
+.camera-diag {
+  font-size: 13px;
+  color: var(--ink-sub);
+  min-width: 220px;
+}

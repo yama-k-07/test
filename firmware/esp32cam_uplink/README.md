@@ -16,7 +16,7 @@ ESP32 カメラ ──(インターネットにつながる Wi-Fi)──> Vercel
 
 ## 位置推定用の BLE ビーコンを兼ねる（`ENABLE_AP_BEACON 1`、既定）
 
-- 名前 `MAMOTCHI-<CAMERA_ID>` で BLE の広告を 100ms ごとに出す（`firmware/esp32s3_ap` 2.0.0 と同じ）。その **BLE アドレス**を 30 秒ごとに `POST /api/ap_heartbeat` で知らせるので、ダッシュボードの「**ESP32 AP**」表にカメラが出る（fw 欄は `ble-cam-1.4.0`）
+- 名前 `MAMOTCHI-<CAMERA_ID>` で BLE の広告を 100ms ごとに出す（`firmware/esp32s3_ap` 2.0.0 と同じ）。その **BLE アドレス**を 30 秒ごとに `POST /api/ap_heartbeat` で知らせるので、ダッシュボードの「**ESP32 AP**」表にカメラが出る（fw 欄は `ble-cam-1.5.0` など）
 - ウォッチは `MAMOTCHI-` の BLE を RSSI 上位3つで `ble_reports` に送る（[`docs/WATCH_SCAN_REPORTS.md`](../../docs/WATCH_SCAN_REPORTS.md)）。現場の Wi-Fi AP とも併用できる
 - 初回登録時の名前と距離は `CAMERA_LABEL` / `CAMERA_DISTANCE_M`（`AP_LABEL` / `AP_DISTANCE_M` で別にもできる）。**距離が空のままだと位置推定に使われない**ので、入口からの距離を入れる。カメラは生存通知に BLE アドレス（`ap_mac`）を入れるので、「カメラの設定」と「ESP32 AP」表の**どちらで変えても同じ距離になる**（`supabase/cameras.sql` の `ap_mac` 列が必要）
 - 送信出力は `BLE_TX_POWER`（既定 `ESP_PWR_LVL_P3` = +3dBm、全ビーコンで揃える）。Wi-Fi の出力は下げないので、上り回線は弱くならない
@@ -88,6 +88,20 @@ python scripts/flash_camera.py cam-03 COM9
 
 ダッシュボードの「カメラ」欄にカメラが出る（10 秒以内）→「映像を見る」を押す → 最大 10 秒ほどで映る。
 名前・入口からの距離・受け取る/受け取らないは、同じ欄の「カメラの設定」で変えられる。
+
+## 付いたり消えたりするとき（診断、fw 1.5.0〜）
+
+「カメラの設定」の「診断」欄で、原因の見当をつける（`supabase/camera_diagnostics.sql` を実行しておく。実行しなくても動くが、診断は保存されない）。
+
+| 診断に出るもの | 意味 | 見るところ |
+|---|---|---|
+| 再起動 n回（理由 `brownout`） | 電源の電圧が足りずに再起動した | USB の電源（給電の弱いポート・長いケーブル・モバイルバッテリーの省電力）。カメラ・Wi-Fi・BLE を同時に使うと電流が増える |
+| 再起動 n回（理由 `panic` / `task_wdt` / `int_wdt`） | プログラムが止まって再起動した | シリアルモニタのログ（本体側の USB 口）を送ってください。`空きメモリ 最小` が小さい（数十KB）ならメモリ不足 |
+| 途切れ n回・Wi-Fi つながり直し n回 | 再起動はしていないが、Wi-Fi が切れていた | 電波（-75dBm より弱いと途切れやすい）。カメラを Wi-Fi のアクセスポイントに近づける・向きを変える |
+| 送信の失敗 n回 | Wi-Fi にはつながっているが、サーバーへの送信に失敗した | インターネット側の回線（テザリングの上限・電波） |
+
+- 「再起動」と「途切れ」はサーバーが数える（起動してからの秒数が減った＝再起動、60 秒より長く連絡が無かった＝途切れ）。「途切れ」は古い firmware でも数えられる
+- シリアルモニタには起動時に `[BOOT] reset reason: ...`、Wi-Fi が切れる・つながると `[WIFI] disconnected` / `[WIFI] connected (#回数)` が出る
 
 ## 回線と費用の目安
 

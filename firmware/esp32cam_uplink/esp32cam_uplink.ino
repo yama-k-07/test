@@ -4,7 +4,9 @@
 // ダッシュボード（https://test-fawn-iota-73.vercel.app/）で誰かが「映像を見る」を押している間だけ、
 // 約 1 秒ごとに JPEG を 1 枚ずつサーバーへ送る。誰も見ていない間は 10 秒ごとの生存通知だけ。
 //
-//   10 秒ごと   POST /api/camera_poll   {camera_id, label, distance_m, fw, rssi, ap_mac} → {"send": true/false, ...}
+//   10 秒ごと   POST /api/camera_poll   {camera_id, label, distance_m, fw, rssi, ap_mac, 診断の項目} → {"send": true/false, ...}
+//               診断の項目（1.5.0〜）: uptime_s（起動してからの秒数）, reset_reason（前回なぜ再起動したか）,
+//               wifi_reconnects（Wi-Fi がつながり直した回数）, free_heap / min_free_heap（空きメモリ）, http_fails（送信の失敗回数）
 //   send の間   POST /api/camera_frame?camera_id=...（本文は JPEG そのもの）     → {"send": true/false, ...}
 //
 // ENABLE_LOCAL_VIEW を 1 にすると、今までの CameraWebServer と同じく自分の Wi-Fi も立て、
@@ -29,6 +31,7 @@
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
 #include "img_converters.h"   // frame2jpg（JPEG で撮れないカメラ用）
+#include "esp_system.h"       // esp_reset_reason（前回の再起動の理由。診断用）
 #include <BLEDevice.h>        // 位置推定用の BLE ビーコン（Arduino-ESP32 の BLE ライブラリ。S3 は NimBLE）
 #include "board_config.h"   // CameraWebServer からコピー（CAMERA_MODEL_* の選択と camera_pins.h）
 #include "config.h"
@@ -70,7 +73,7 @@ void startCameraServer();   // app_httpd.cpp
 void setupLedFlash();       // app_httpd.cpp
 #endif
 
-static const char *FW_VERSION = "1.4.0";
+static const char *FW_VERSION = "1.5.0";
 static const uint32_t WIFI_RETRY_MS = 10 * 1000;
 static const uint32_t HEARTBEAT_INTERVAL_MS = 30 * 1000;   // サーバーの AP_NODE_ONLINE_SEC(90) の 1/3
 
@@ -83,6 +86,27 @@ static uint32_t lastFrameMs = 0;
 static uint32_t lastWifiTryMs = 0;
 static uint32_t lastHeartbeatMs = 0;
 static String bleAddress;                     // BLE ビーコンのアドレス（ウォッチが mac01/mac02 として送る値）
+// 診断用（ダッシュボードの「カメラの設定」表に出る。付いたり消えたりする原因を、再起動か Wi-Fi の切断かで見分ける）
+static uint32_t wifiConnects = 0;             // Wi-Fi につながった回数（最初の 1 回を含む）
+static bool wifiWasConnected = false;
+static uint32_t httpFails = 0;                // サーバーへの送信の失敗（200 以外）の回数
+
+// 前回の再起動の理由（ESP-IDF の esp_reset_reason_t を文字に）。brownout は電源の電圧不足、*_wdt は処理が止まった
+static const char *resetReasonText() {
+  switch (esp_reset_reason()) {
+    case ESP_RST_POWERON: return "poweron";
+    case ESP_RST_EXT: return "external";
+    case ESP_RST_SW: return "software";
+    case ESP_RST_PANIC: return "panic";
+    case ESP_RST_INT_WDT: return "int_wdt";
+    case ESP_RST_TASK_WDT: return "task_wdt";
+    case ESP_RST_WDT: return "wdt";
+    case ESP_RST_DEEPSLEEP: return "deepsleep";
+    case ESP_RST_BROWNOUT: return "brownout";
+    case ESP_RST_SDIO: return "sdio";
+    default: return "unknown";
+  }
+}
 
 static bool initCamera() {
   // 設定は CameraWebServer の setup() と同じ。違いは画像の大きさと画質（回線を節約するため）
@@ -201,17 +225,25 @@ static void sendPoll() {
   if (!beginRequest(http, "/api/camera_poll")) return;
   http.addHeader("Content-Type", "application/json");
   // ap_mac: 位置推定用の AP を兼ねるとき、その BSSID（サーバーがカメラの距離を ESP32 AP 表と連動させる）
-  char body[320];
+  char body[512];
   snprintf(body, sizeof(body),
-           "{\"camera_id\":\"%s\",\"label\":\"%s\",\"distance_m\":%.1f,\"fw\":\"%s\",\"rssi\":%ld,\"ap_mac\":\"%s\"}",
+           "{\"camera_id\":\"%s\",\"label\":\"%s\",\"distance_m\":%.1f,\"fw\":\"%s\",\"rssi\":%ld,\"ap_mac\":\"%s\","
+           "\"uptime_s\":%lu,\"reset_reason\":\"%s\",\"wifi_reconnects\":%lu,"
+           "\"free_heap\":%lu,\"min_free_heap\":%lu,\"http_fails\":%lu}",
            CAMERA_ID, CAMERA_LABEL, (double)CAMERA_DISTANCE_M, FW_VERSION, (long)WiFi.RSSI(),
-           ENABLE_AP_BEACON ? bleAddress.c_str() : "");
+           ENABLE_AP_BEACON ? bleAddress.c_str() : "",
+           (unsigned long)(millis() / 1000), resetReasonText(),
+           (unsigned long)(wifiConnects > 0 ? wifiConnects - 1 : 0),
+           (unsigned long)ESP.getFreeHeap(), (unsigned long)ESP.getMinFreeHeap(), (unsigned long)httpFails);
   int code = http.POST((uint8_t *)body, strlen(body));
   String res = code > 0 ? http.getString() : "";
   http.end();
   Serial.printf("[POLL] %d %s\n", code, res.c_str());
   if (code == 200) readInstruction(res);
-  else sending = false;
+  else {
+    httpFails++;
+    sending = false;
+  }
 }
 
 #if ENABLE_AP_BEACON
@@ -288,13 +320,17 @@ static void sendFrame() {
   http.end();
   Serial.printf("[FRAME] %u bytes -> %d\n", (unsigned)len, code);
   if (code == 200) readInstruction(res);
-  else sending = false;   // 失敗したら次の poll まで待つ
+  else {
+    httpFails++;
+    sending = false;   // 失敗したら次の poll まで待つ
+  }
 }
 
 void setup() {
   Serial.begin(115200);
   delay(300);
   Serial.printf("\n=== MAMOTCHI ESP32 camera fw %s (%s) ===\n", FW_VERSION, CAMERA_ID);
+  Serial.printf("[BOOT] reset reason: %s\n", resetReasonText());
 
   if (!initCamera()) {
     Serial.println("[CAM] カメラが使えません。board_config.h の機種と配線を確認してください");
@@ -333,7 +369,15 @@ void setup() {
 
 void loop() {
   ensureWifi();
-  if (WiFi.status() != WL_CONNECTED) {
+  bool connected = WiFi.status() == WL_CONNECTED;
+  if (connected && !wifiWasConnected) {
+    wifiConnects++;
+    Serial.printf("[WIFI] connected (#%lu) rssi=%ld\n", (unsigned long)wifiConnects, (long)WiFi.RSSI());
+  } else if (!connected && wifiWasConnected) {
+    Serial.println("[WIFI] disconnected");
+  }
+  wifiWasConnected = connected;
+  if (!connected) {
     sending = false;
     delay(200);
     return;

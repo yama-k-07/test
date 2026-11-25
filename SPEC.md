@@ -134,7 +134,7 @@
 | `TABLE_POSITION_EVAL` | `position_eval` | `id` | `device_id`, `true_distance_m`, `method_selected`, `sources`, `top2_basic`, `top2_series`, `rssi_basic`, `rssi_series`, `note`, `created_at` | Flask | Flask |
 | `TABLE_SEGMENT_INSTRUCTIONS` | `segment_instructions` | `segment_key`（例 `0-100`） | `start_m`, `end_m`, `instruction`（`none/wait/inward/outward`）, `updated_at` | Flask | Flask |
 | `TABLE_DEVICE_SEGMENT_STATE` | `device_segment_state` | `device_id` | `segment_key`（最後にいた区間）, `segment_updated_at`（送った区間の指示の時刻）, `updated_at` | Flask | Flask |
-| `TABLE_CAMERAS` | `cameras` | `camera_id` | `label`, `distance_m`, `enabled`, `ap_mac`（兼ねている AP の BSSID）, `fw`, `wifi_rssi`, `width`, `height`, `frame_bytes`, `last_seen`, `last_frame_at`, `watch_until`, `created_at` | ESP32 カメラ ＋ Flask | Flask |
+| `TABLE_CAMERAS` | `cameras` | `camera_id` | `label`, `distance_m`, `enabled`, `ap_mac`（兼ねている AP の BSSID）, `fw`, `wifi_rssi`, `width`, `height`, `frame_bytes`, `last_seen`, `last_frame_at`, `watch_until`, `created_at`、診断（2026-11-25〜、`supabase/camera_diagnostics.sql`）: `uptime_s`, `reset_reason`, `wifi_reconnects`, `free_heap`, `min_free_heap`, `http_fails`, `restarts`, `last_restart_at`, `offline_count`, `last_offline_at`, `last_offline_sec` | ESP32 カメラ ＋ Flask | Flask |
 
 - `area_status_v2` は「エリアと BSSID の対応」「エリアの指示・火災フラグ」「並び順」の3役を1テーブルで兼ね、3つの API（`/api/area`、`/api/area_status`、`/api/area_order`）がそれぞれ別の列を部分 upsert する。
 - `device_fire_alerts` は Realtime の配信対象（`supabase/fire_location.sql` で `supabase_realtime` に追加）。ウォッチが anon key で読むなら同 SQL 末尾の RLS ポリシーを有効にする。
@@ -216,7 +216,7 @@
 
 | メソッド パス | 認証 | 動作 |
 |---|---|---|
-| `POST /api/camera_poll` | トークン | 本文 `{camera_id, label, distance_m, fw, rssi, ap_mac?}` → `{send, interval_ms, poll_sec}`。初回は `cameras` に行を作る（`label` / `distance_m` は初期値）。以後は `last_seen`・`ap_mac` 等だけ更新（`ap_mac` 列が無い DB では `ap_mac` を外して保存） |
+| `POST /api/camera_poll` | トークン | 本文 `{camera_id, label, distance_m, fw, rssi, ap_mac?, uptime_s?, reset_reason?, wifi_reconnects?, free_heap?, min_free_heap?, http_fails?}` → `{send, interval_ms, poll_sec}`。初回は `cameras` に行を作る（`label` / `distance_m` は初期値）。以後は `last_seen`・`ap_mac`・診断だけ更新。サーバーは `uptime_s` が前回より減ったら `restarts` を 1 増やし、前回の連絡から `CAMERA_ONLINE_SEC` より空いていたら `offline_count` を 1 増やす（`camera_diagnostics`）。診断や `ap_mac` の列が無い DB では、その列を外して保存 |
 | `POST /api/camera_frame?camera_id=…` | トークン | 本文は JPEG そのもの（600KB まで、`X-Frame-Width` / `X-Frame-Height` 任意）。誰かが見ている間だけ Storage `camera-frames/<id>/latest.jpg` に上書き保存。返事は poll と同じ |
 | `GET /api/cameras` | 🔒 | 全カメラ＋`online`（60 秒以内に連絡）＋`watching`。`ap_mac` が `ap_nodes` にあるカメラは `distance_m` を **ap_nodes の距離で返し**、`distance_source: 'ap'`・`ap_label` を付ける |
 | `POST /api/cameras` | 🔒 | `{camera_id, label?, distance_m?, enabled?}`。AP を兼ねるカメラの `distance_m` は `ap_nodes` にも書く（距離は1つに揃う） |
@@ -248,7 +248,7 @@
 2026-11-22 から `wifi_reports_v2`（新しい順に最大 5000 行）と `ble_reports`（直近 10 分、最大 5000 行）から作る。旧 `wifi_reports` は読まない。各装置について次の1行を返す（形は旧 `wifi_reports` の最新行と同じなので、マップ・入退場・通報・`/api/entry_status` はそのまま使える）。
 - `device_id`: どちらかの表に行がある装置
 - `created_at`: 最後にスキャンが届いた時刻（オンライン判定に使う）
-- `mac01` / `mac02`: 位置の目印の上位2つ。最新の BLE が最新のスキャンから `LATEST_BLE_PRIORITY_SEC`（30 秒）以内なら BLE、そうでなければ Wi-Fi
+- `mac01` / `mac02`: 位置の目印の上位2つ。最新の BLE が最新のスキャンから `LATEST_BLE_PRIORITY_SEC`（45 秒。ウォッチは約 30 秒ごとに送るので、1 回取りこぼしても BLE のまま。2026-11-25 に 30 → 45）以内なら BLE、そうでなければ Wi-Fi
 - `report`: 通報（`report_of`）。`wifi_reports_v2` と `ble_reports` それぞれの最新の行のうち、**後から届いた方**の `report`。空（列が無い・送られていない）の行は使わず、もう一方の値を使う。どちらも空なら false
 
 「最新」は `id` が大きい行（＝後から届いた行）。BLE は 10 分より前の行を読まないので、BLE しか送らない装置は 10 分でマップから消える。
@@ -287,7 +287,8 @@
 - **③ の計算**: 強い AP を a、次の AP を b とし、距離減衰 `RSSI = P0 − 10·n·log10(r)` から `RSSI_a − RSSI_b = 10·n·log10(r_b / r_a)`、`r_a + r_b = |d_a − d_b|` を解いて `d_a` から `r_a` だけ b 側に置く。`PATH_LOSS_N = 2.0`（仮置き、現地の記録で決める）。差を使うので機種ごとの出力の違いは打ち消し合う。例: 100m が -60dBm・200m が -70dBm → 約 124m。RSSI が無いスキャンは ① と同じ
 - **⑤ の計算**（2026-11-20〜）: Wi-Fi のスキャンだけを使う（BLE のスキャンでは値を出さない）。**いちばん強い AP の前後1区間**の地点 x を 1m 刻みで動かし（トンネル全体を探すと、遠い AP の電波のぶれで離れた所を選ぶことがある）、AP i までの距離 `r_i = √((x − d_i)² + 3²)`（高さの差 `WIFI3_AP_HEIGHT_M = 3`）から予想 RSSI `A − 10·n·log10(r_i)` を作って、実際の RSSI との差の二乗和が最小の x を選ぶ。A（機種の出力）は x ごとに最小二乗で決めるので要らない。③ が「強い2つの AP の間に置く」のに対し、⑤ は3つの AP すべてに合う1点を探すので、2つの AP の外側にいる場合や、1つの AP の RSSI がずれた場合にも対応できる。RSSI が2つ未満なら ① と同じ。雑音のない RSSI では 30m・130m・260m を ±1m で当てることをテストで確認
 - **Wi-Fi と BLE の両方を使う方式**: ①〜④ は、両方の表に行があれば両方のスキャンを1本の時系列に混ぜる（同じ計算で）。⑥ はスキャンの種類ごとに向いた計算（BLE は ③、Wi-Fi は ⑤）を使ってから混ぜる。⑤ は Wi-Fi だけ
-- **② ④ ⑤ ⑥ の計算**: 位置のゆらぎ `SERIES_WALK_MPS = 3.0` m/s（人の速さより大きめにして遅れを減らす。1.5 だとシミュレーションで遅れが目立った）、測定のばらつき = `SOURCE_SIGMA_SPACINGS`（Wi-Fi 0.35・BLE 0.25）× AP 間隔。予測から 3σ を超え、かつ `SERIES_MAX_SPEED_MPS = 3` m/s でも届かない飛びは捨てる。3 回続けて外れたら本当に動いたとみなし、新しい値から始め直す
+- **② ④ ⑤ ⑥ の計算**: 直近 `SERIES_WINDOW_SEC = 180` 秒のスキャン（ウォッチは約 30 秒ごとなので 6 回分ずつ）。位置のゆらぎ `SERIES_WALK_MPS = 0.5` m/s（作業員はほぼその場にいて、歩くのは 25m を 20 秒ほど。2026-11-25 に 3.0 → 0.5）、測定のばらつき = `SOURCE_SIGMA_SPACINGS`（Wi-Fi 0.35・BLE 0.25）× AP 間隔。予測から 3σ を超え、かつ `SERIES_MAX_SPEED_MPS = 3` m/s でも届かない飛びは捨てる。捨てた値が `SERIES_RESET_SEC = 4` 秒以上・2 回以上（`SERIES_RESET_MIN`）続いたら本当に動いた（車など）とみなし、新しい値から始め直す（2026-11-25 までは「3 回続けて」。回数だと送信の間隔で追いつく早さが変わるため秒数に）。止まっている人の揺れと引き換えに、歩いている人の表示は 30 秒ほど遅れる（§10）
+- **ウォッチの不正な値**（2026-11-25〜、`_scan_rows_to_scans`）: MAC の形でない欄（ウォッチが見つからなかった欄に送る「該当なし」）と、`RSSI_MAX_PLAUSIBLE = -30` dBm より強い RSSI（-13・-9dBm など、トンネルではありえない値）は空として扱う
 - **Wi-Fi と BLE の比重**: basic は `SOURCE_WEIGHT`（今はどちらも 1.0）を重みに掛け、series は上のばらつきで自然に重み付けされる。値は `position_eval` の記録で決める
 - **スキャンの時刻**（`scan_time`）: `scanned_at`（ウォッチの時計）が、届いた時刻 `created_at` より `SCAN_TIME_MAX_AHEAD_SEC`（30 秒）以上後か、`SCAN_TIME_MAX_DELAY_SEC`（1 時間）以上前なら、時計かタイムゾーンの間違いとみなして `created_at` を使う。2026-11-21 のデバッグで、タイムゾーン無しの日本時間（9 時間先に見える）と時刻の無い行が混ざると、片方のスキャンがまるごと捨てられることが分かったため
 - **古い位置を出さない**: 新しい表の装置は、最後に AP が分かったスキャンが最新のスキャンより `SCAN_STALE_SEC`（16 秒）以上古ければ位置を出さない。旧形式の装置は今まで通り（最新レポートで AP が分からなければ出さない）
@@ -442,6 +443,7 @@
 - ボタンを押すと `POST /api/segment_instructions {segment_key, instruction}`（`saveSegmentInstruction`）。サーバーは区間の指示を `segment_instructions` に保存し、**その区間に今いる人全員**に個別指示（`device_instructions`）として送る（「なし」も送る）。
 - **あとから区間に入った人**には、`GET /api/wifi_map` のたびに `apply_segment_instructions` が、その区間の指示（「なし」以外）を1回だけ送る。送ったことは `device_segment_state` に覚える。「なし」の区間に入ったときは、今の指示を消さない。
 - 区間の指示のあとにポップアップで個別に出した指示は、その人が別の区間に移るか区間の指示が変わるまで残る。
+- **区間の切り替えの余裕**（2026-11-25〜）: 前にいた区間（`device_segment_state.segment_key`）の外へ、区間の長さの `SEGMENT_HYSTERESIS = 0.2`（25m の区間なら 5m）より多く出たときだけ、隣の区間に移ったとみなす（`segment_for_distance` の `prev_key`）。境目の近くに止まっている人の推定が少し揺れても、区間の出入り（指示の送り直し）がくり返されない。マップの「いる人」（`segments_with_instructions`）と、区間に指示を出したときの送り先も同じ決め方。実証実験の CSV では、止まっている人の区間の切り替えが 17 分で 46 回 → 6 回に減った（§10）
 - ウォッチは今までどおり `device_instructions` を読むだけなので、ウォッチ側の変更は要らない。区間は AP の配置から決まる（AP を足す・距離を変えると区間も変わり、古い区間の指示は使われなくなる）。
 
 **火災位置**
@@ -527,6 +529,7 @@
 - **定数**（`app.py`）: `CAMERA_WATCH_SEC=20`、`CAMERA_IDLE_POLL_SEC=10`、`CAMERA_FRAME_INTERVAL_MS=1000`、`CAMERA_ONLINE_SEC=60`、`CAMERA_MAX_FRAME_BYTES=600KB`
 - **近くで見る（任意）**: `ENABLE_LOCAL_VIEW 1` で自分の Wi-Fi も立て（AP+STA）、CameraWebServer の `app_httpd.cpp` の画面を `http://192.168.4.1` で同時に出す。同じカメラを使うので両方見るとコマ数は落ちる
 - **firmware**: 実機は ESP32-S3-EYE（`CAMERA_MODEL_ESP32S3_EYE`、上下反転を補正）。CameraWebServer の `board_config.h` / `camera_pins.h` / `partitions.csv`（と、近くで見るなら `app_httpd.cpp` / `camera_index.h`）をコピーして使う（Git には入れない）。**位置推定用の BLE ビーコンを兼ねる**（`ENABLE_AP_BEACON 1`、既定、FW 1.4.0）：名前 `MAMOTCHI-<CAMERA_ID>` で広告し、BLE アドレスを 30 秒ごとに `/api/ap_heartbeat` へ送り（§8.2 と同じ項目、fw は `ble-cam-1.4.0`）、`ap_nodes` に登録される。生存通知に `ap_mac`（BLE アドレス）を入れるので、カメラ欄の距離と「ESP32 AP」表の距離は連動する（正は `ap_nodes.distance_m`。どちらの表で変えても同じ値になる）。BLE の出力は `BLE_TX_POWER`（既定 +3dBm）。Wi-Fi の出力は下げない。自分の Wi-Fi（`LOCAL_AP_SSID`）は近くで見る画面専用。画像はまず JPEG・VGA で撮り、センサーが JPEG 非対応（`esp_camera_init` が `0x106`）なら RGB565（`RGB_FRAME_SIZE` 既定 QVGA）で撮り直して `frame2jpg`（`RGB_JPEG_QUALITY` 既定 60）で JPEG に変換して送る（FW 1.2.0）。ボード設定は ESP32S3 Dev Module・OPI PSRAM・Custom パーティション。`config.h` に `CAMERA_ID`、Wi-Fi、`AP_TOKEN`、画像サイズ（既定 VGA）と画質（既定 14）。`esp_camera_*` と HTTPClient の API は公式ソースで確認済み。2026-11-18 に Arduino-ESP32 3.3.13（ESP32S3 Dev Module・OPI PSRAM・Custom パーティション）で、近くで見る画面あり（約 1.15MB）・なし（約 1.08MB）の両方とも**コンパイル成功**。同日、実機（ESP32-S3-EYE、センサー PID 0x9b＝JPEG 非対応のため RGB565→JPEG 変換で動作）をテザリング経由でつなぎ、本番ダッシュボードで**映像が見えることを確認**
+- **診断**（FW 1.5.0〜）: 生存通知に起動からの秒数・前回の再起動の理由（`esp_reset_reason`。`brownout` は電圧不足）・Wi-Fi のつながり直しの回数・空きメモリ・送信の失敗回数を入れる。サーバーは再起動（起動からの秒数が減った）と途切れ（60 秒より長く連絡なし。古い FW でも数えられる）を数え、「カメラの設定」の「診断」欄に出す。毎回変わる値なので表は作り直さず、その欄の文字だけ書き換える。見方は `firmware/esp32cam_uplink/README.md` の「付いたり消えたりするとき」
 - **回線の目安**: 見ている間 1 時間に 70〜180MB、見ていない間は 10 秒ごとの小さな問い合わせだけ
 - **導入**: `supabase/cameras.sql` を実行 → Vercel に `AP_SHARED_TOKEN` → firmware を書き込む（`firmware/esp32cam_uplink/README.md`）
 - サーバー側は Supabase を偽物に差し替えたテスト（20 項目）で、登録・送信の開始と停止・保存・閲覧・認証を確認済み
@@ -544,12 +547,30 @@
 | → ウォッチ（可能性） | `area_status_v2` / ログイン不要の API | `/api/area_status`、`/api/user`、`/api/area`、`/api/area_order`、`/api/entry_status`。ウォッチが使っているかはコードから確定できない |
 
 ウォッチ側へのお願い（任意だが精度に効く）:
+- 2026-11-25 の実証実験の CSV で分かったこと: `scanned_at` が全部 null、見つからなかった欄が `"該当なし"`・RSSI `0`（約束は null。サーバーは空として扱う）、ありえない強さ（-13・-9dBm）や同じ値（-42dBm）が別々の AP にくり返し出る、アプリが 15 分ほど止まることがある（Wi-Fi と BLE が同時に止まる＝省電力でアプリが止められている）。
+- 送る間隔は BLE も Wi-Fi も約 30 秒。Wi-Fi は Android のスキャン回数の制限（2 分に 4 回）でこれが限界だが、**BLE は制限が無いので数秒ごとに送ると精度が大きく上がる**（§10）。
 - SSID が `MAMOTCHI-` で始まる AP だけを mac01 / mac02 にする（関係ない AP を除くため）。
 - スキャン結果の時刻を確かめる。Android / Wear OS のスキャン回数制限で、中身が古いままになりやすい。
 
 ---
 
 ## 10. 精度（シミュレーション）
+
+### 10.0 2026-11-25 の実証実験の CSV（実データ）と、それに合わせた調整
+- ウォッチ 2 台・12:05〜13:46。BLE も Wi-Fi も約 30 秒ごと（想定していた BLE 1 秒・Wi-Fi 5 秒ではなかった）。一番強く見えた Wi-Fi AP と BLE ビーコンの登録距離は矛盾なく合っていた（例: 0F:43:8B 110m と CAM01 135m、0A:98:35 310m と CAM06 285m）。
+- CSV をそのまま流し込み、止まっていた時間帯（一番強いビーコンが変わらなかった間）で今の方式 ② を比べた（10 秒ごとに推定）:
+
+| 止まっていた時間帯 | 2026-11-25 まで（walk 3.0・60 秒・余裕なし） | 今（walk 0.5・180 秒・区間の余裕 20%） |
+|---|---|---|
+| CAM01（135m）付近 17 分 | ばらつき 13.7m・区間の切り替え 46 回 | 8.6m・6 回 |
+| CAM04（235m）付近 5 分 | 22.8m・7 回 | 18.5m・2 回 |
+| CAM06（285m）付近 23 分 | 11.6m・48 回 | 4.8m・6 回 |
+
+- 30 秒ごとのシミュレーション（BLE 25m 間隔・電波の偏りがゆっくり変わるモデル）では、止まっている人の平均誤差 9.6m → 6.0m、25m を 20 秒で歩いたときの遅れは 10 秒 → 30 秒、車（時速 20km）は 43〜63 秒（30 秒ごとのデータでは、これより速く追いつけない）。
+- 引き換え: ずっと歩き回る人（BLE 1 秒ごと・100m 間隔のシミュレーション）では、② ④ ⑥ の平均誤差が 5m 台 → 18m 前後に悪くなる。ウォッチの BLE を数秒ごとにしたら、`SERIES_WALK_MPS` を上げて調整し直すこと。
+- 「動き出しを見つけたら追いつく速さを上げる」方法も試したが、30 秒ごとのデータでは電波の揺れを動き出しと間違えて逆効果だったので入れていない。
+
+### 10.1 以前のシミュレーション（2026-10〜11）
 
 いずれも計算機上のシミュレーションで、実機では計っていない。条件は次のとおり。
 - 0〜500m のトンネルを 1m/秒で往復する作業者（奥で 60 秒止まる）
@@ -640,6 +661,7 @@
 | 2026-10-11 | #25 | マップから個別指示、位置推定の一本化と平滑化、UI 改善、火災位置の通知、ログイン画面、仕様書・CodeQL 指摘の修正 |
 | 2026-11-11 | #26 | AP を 100m 間隔に修正、`ApMap`、ESP32-S3 AP（heartbeat・管理画面・ファームウェア）、AGENTS.md ほか開発支援。**本番デプロイは失敗中** |
 | 2026-11-18 | #28〜#30 | ESP32 カメラ（外から見るコマ送り、RGB565→JPEG 変換）、カメラが位置の目印を兼ね距離を ESP32 AP 表と連動 |
+| 2026-11-25 | — | 現地の調査と実証実験の CSV から: カルマンを止まっている作業員向けに（`SERIES_WALK_MPS` 0.5・180 秒・移動の判定を秒数で）、区間の切り替えに余裕（`SEGMENT_HYSTERESIS` 20%）、ウォッチの不正な値を空として扱う、`LATEST_BLE_PRIORITY_SEC` 45 秒。カメラの診断（firmware 1.5.0・再起動と途切れをサーバーで数える・「カメラの設定」に「診断」欄） |
 | 2026-11-25 | — | 欄がちらついて消える問題を修正：Supabase のクライアントを処理ごとに分ける（`ThreadLocalSupabase`）、読み込みの失敗を「0件」にせず 503 にする（うその入退場・火災解除も防ぐ）、表を余計に作り直さない、すりガラスをやめる、`requirements.txt` の版を固定 |
 | 2026-11-22 | — | `ble_reports` にも通報（`report`）。両方の表の最新の行のうち後から届いた方を使う（`report_of`） |
 | 2026-11-22 | — | ウォッチの送り先を `wifi_reports_v2` / `ble_reports` に一本化（旧 `wifi_reports` は読まない）。通報は `wifi_reports_v2.report`、画面の Realtime も `wifi_reports_v2`。作業者ポップアップが下の欄に隠れないように・値が無いときは理由を表示 |
