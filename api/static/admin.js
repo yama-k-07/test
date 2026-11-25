@@ -1638,7 +1638,7 @@ async function loadCameras() {
   // 表示に使う項目だけで比べる（wifi_rssi などは heartbeat のたびに変わるが画面には出ない）。
   // 設定の表は、稼働状態だけが変わったときは作り直さずに状態の札だけ書き換える
   const settingsSig = JSON.stringify(cameras.map(c => [c.camera_id, c.label, c.distance_m, c.distance_source, c.ap_label, c.ap_mac, c.enabled]));
-  const sig = JSON.stringify([settingsSig, cameras.map(c => !!c.online)]);
+  const sig = JSON.stringify([settingsSig, cameras.map(c => [!!c.online, cameraDiagText(c)])]);
   if (sig === lastCamerasSig) return;
   const settingsChanged = lastCamerasSig === null || settingsSig !== lastCameraSettingsSig;
   lastCamerasSig = sig;
@@ -1653,6 +1653,29 @@ async function loadCameras() {
   }
 }
 
+// 「診断」欄の文（firmware 1.5.0 からの項目と、サーバーが数えた再起動・途切れ）。毎回変わるので文字だけ書き換える
+function cameraDiagText(cam) {
+  const parts = [];
+  if (typeof cam.uptime_s === 'number') {
+    const m = Math.floor(cam.uptime_s / 60);
+    parts.push(`起動から ${m >= 60 ? `${Math.floor(m / 60)}時間${m % 60}分` : `${m}分`}`);
+  }
+  if (cam.restarts) {
+    parts.push(`再起動 ${cam.restarts}回（最後 ${formatEntryTime(cam.last_restart_at)}${cam.reset_reason ? `・理由 ${cam.reset_reason}` : ''}）`);
+  } else if (cam.reset_reason) {
+    parts.push(`前回の起動の理由 ${cam.reset_reason}`);
+  }
+  if (cam.offline_count) {
+    parts.push(`途切れ ${cam.offline_count}回（最後 ${formatEntryTime(cam.last_offline_at)} から ${cam.last_offline_sec}秒）`);
+  }
+  if (typeof cam.wifi_reconnects === 'number') parts.push(`Wi-Fi つながり直し ${cam.wifi_reconnects}回`);
+  if (typeof cam.wifi_rssi === 'number') parts.push(`電波 ${cam.wifi_rssi}dBm${cam.wifi_rssi <= -75 ? '（弱い）' : ''}`);
+  if (typeof cam.min_free_heap === 'number') parts.push(`空きメモリ 最小 ${Math.round(cam.min_free_heap / 1024)}KB`);
+  if (cam.http_fails) parts.push(`送信の失敗 ${cam.http_fails}回`);
+  if (typeof cam.uptime_s !== 'number') parts.push('（firmware 1.5.0 にすると、再起動の理由なども出ます）');
+  return parts.join(' / ');
+}
+
 function setCameraSettingsBadge(badge, cam) {
   badge.textContent = cam.online ? '稼働中' : '停止';
   badge.classList.toggle('entry-in', !!cam.online);
@@ -1663,8 +1686,12 @@ function updateCameraSettingsStatus(cameras) {
   const body = document.getElementById('cameraSettingsBody');
   if (!body) return;
   cameras.forEach(cam => {
-    const badge = body.querySelector(`tr[data-camera-id="${CSS.escape(cam.camera_id)}"] .entry-badge`);
+    const row = body.querySelector(`tr[data-camera-id="${CSS.escape(cam.camera_id)}"]`);
+    if (!row) return;
+    const badge = row.querySelector('.entry-badge');
     if (badge) setCameraSettingsBadge(badge, cam);
+    const diag = row.querySelector('.camera-diag');
+    if (diag) diag.textContent = cameraDiagText(cam);
   });
 }
 
@@ -1795,7 +1822,7 @@ function renderCameraSettings(cameras) {
   if (!body) return;
   body.innerHTML = '';
   if (cameras.length === 0) {
-    body.innerHTML = '<tr><td colspan="6" style="text-align:center;color:grey;">カメラはまだありません</td></tr>';
+    body.innerHTML = '<tr><td colspan="7" style="text-align:center;color:grey;">カメラはまだありません</td></tr>';
     return;
   }
   cameras.forEach(cam => {
@@ -1816,6 +1843,7 @@ function renderCameraSettings(cameras) {
           <option value="0" ${enabled ? '' : 'selected'}>受け取らない</option>
         </select>
       </td>
+      <td class="camera-diag">${escapeHtml(cameraDiagText(cam))}</td>
       <td class="ap-node-actions">
         <button class="button is-success is-small" onclick="saveCamera(this)">保存</button>
         <button class="button is-danger is-small" onclick="deleteCamera(this)">削除</button>

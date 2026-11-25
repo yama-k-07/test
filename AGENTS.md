@@ -58,7 +58,7 @@ ESP32-S3 ビーコン（BLE）──heartbeat──> /api/ap_heartbeat ──> S
 |---|---|
 | セクションの並び・見出し・説明文を変える | `index.html`（`<section class="box">` 単位） |
 | 新しいセクションを足す | `index.html` に器（`id` 付き）→ `admin.js` に `loadXxx()` を作り、`DOMContentLoaded` と `setInterval` の両方に登録（§4 の更新パターン） |
-| AP の区間ごとの指示（マップの点線の間を押す） | `admin.js` の `findSegmentAt` / `openSegmentPopup` / `saveSegmentInstruction`、区間の描画は `renderTunnelMap`。サーバーは `app.py` の `ap_segments` / `apply_segment_instructions` / `handle_segment_instructions`（区間に入った人へ送る決まりはここ） |
+| AP の区間ごとの指示（マップの点線の間を押す） | `admin.js` の `findSegmentAt` / `openSegmentPopup` / `saveSegmentInstruction`、区間の描画は `renderTunnelMap`。サーバーは `app.py` の `ap_segments` / `apply_segment_instructions` / `handle_segment_instructions`（区間に入った人へ送る決まりはここ）、区間の切り替えの余裕は `segment_for_distance` / `SEGMENT_HYSTERESIS` |
 | 欄の並び・間隔（全欄を縦 1 列） | `index.html` の並び（上から 位置推定の方式 → マップ → カメラ → 入場管理 → 設定 → ESP32 AP）、`style.css` 末尾の「2026-11-22 縦長レイアウト」（欄の間 56px、`.settings-container` / `.entry-status-grid` を 1 列に、`.card-help` を欄の中で広げる） |
 | デモ（ウォッチ無しで動かす） | `scripts/demo_watch.py`（歩き方 `Walker`、電波の作り方 `rssi_at` / 定数 `BLE_*` `WIFI_*`）。使い方は docs/AI_WORKFLOW.md §5 |
 | トンネルマップの描き方（色・大きさ・ラベル） | `admin.js` の `renderTunnelMap`（`const H`・色定数 `C_*` もここ）。高さを変えたら `style.css` の `#tunnelMap` の `height` も同じ値に |
@@ -80,7 +80,7 @@ ESP32-S3 ビーコン（BLE）──heartbeat──> /api/ap_heartbeat ──> S
 
 | やりたいこと | 編集する場所 |
 |---|---|
-| 位置推定の計算を変える | `estimate_positions`（全体の流れ）、`estimate_methods`（①〜⑥）、`scan_top2_m` / `scan_rssi_m` / `scan_wifi3_m` / `scan_fusion_m`（1回分の距離、`MAC01_WEIGHT` / `PATH_LOSS_N` / `WIFI3_*`）、`smooth_distance_m`（今までの平滑化）、`series_distance_m`（カルマン、`SERIES_*`）、Wi-Fi と BLE の比重 `SOURCE_WEIGHT` / `SOURCE_SIGMA_SPACINGS`、定数 `SMOOTHING_*` / `OUTLIER_SPACINGS` |
+| 位置推定の計算を変える | `estimate_positions`（全体の流れ）、`estimate_methods`（①〜⑥）、ウォッチの不正な値を捨てる `_scan_rows_to_scans`（`RSSI_MAX_PLAUSIBLE`）、`scan_top2_m` / `scan_rssi_m` / `scan_wifi3_m` / `scan_fusion_m`（1回分の距離、`MAC01_WEIGHT` / `PATH_LOSS_N` / `WIFI3_*`）、`smooth_distance_m`（今までの平滑化）、`series_distance_m`（カルマン、`SERIES_*`。値はウォッチの送信間隔＝今は約 30 秒に合わせてある。間隔が変わったら SPEC §10.0 の手順で調整し直す）、Wi-Fi と BLE の比重 `SOURCE_WEIGHT` / `SOURCE_SIGMA_SPACINGS`、定数 `SMOOTHING_*` / `OUTLIER_SPACINGS` |
 | 位置推定の方式を足す・名前を変える | `app.py` の `POSITION_METHODS`（1回分の求め方は `SCAN_ESTIMATORS`、basic / series の組み合わせは `SCAN_ESTIMATOR_MODES`）、`admin.js` の `POSITION_METHOD_SHORT`、`position_eval` の列（`supabase/scan_reports.sql`、追加分は `ALTER TABLE`） |
 | AP の距離・台数を変える | 画面で設定（コード変更不要）: 現場の Wi-Fi AP は「AP位置設定」（MAC と距離）、ESP32 は「ESP32 AP」表。`AP_LABELS` / `AP_DISTANCES_M`（`admin.js` の同名定数も）は、距離が未設定の既設6台の初期値と名前 |
 | AP の距離の出どころ・トンネルの両端・間隔 | `class ApMap` と `load_ap_map` |
@@ -93,7 +93,7 @@ ESP32-S3 ビーコン（BLE）──heartbeat──> /api/ap_heartbeat ──> S
 | API を追加する | 既存の `@app.route` を真似る。管理画面用はログイン必須の `@login_required` を付ける。SPEC.md §5 の API 表に追記 |
 | テーブルを追加する | `supabase/新しい名前.sql` を作り、`app.py` 冒頭に `TABLE_XXX = "..."` を足す。SPEC.md §4 に追記 |
 | ESP32 AP からの受付 | `ap_heartbeat`（トークン認証）、`handle_ap_nodes` |
-| カメラ映像の受付・配信 | `camera_poll` / `camera_frame_upload`（カメラから。トークン認証）、`camera_frame_view` / `handle_cameras`（画面から）。定数 `CAMERA_*` |
+| カメラ映像の受付・配信 | `camera_poll` / `camera_frame_upload`（カメラから。トークン認証）、`camera_frame_view` / `handle_cameras`（画面から）。定数 `CAMERA_*`。診断（再起動・途切れの数え方）は `camera_diagnostics`、画面は `admin.js` の `cameraDiagText` |
 
 ### ESP32-S3 ファームウェア（`firmware/esp32s3_ap/`）
 
