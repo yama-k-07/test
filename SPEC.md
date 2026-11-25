@@ -87,7 +87,7 @@
 | `api/static/style.css` | 約960 | **使用中** | ドット調テーマ（DotGothic16 + Bulma 上書き）。末尾に「見やすさ調整」ブロック |
 | `api/static/banner.png` | | 使用中 | ロゴ |
 | `api/vercel.json` | | 使用中 | Vercel の設定（§2.1） |
-| `requirements.txt` | | 使用中 | `flask, supabase, requests, python-dotenv`（**バージョン未固定**） |
+| `requirements.txt` | | 使用中 | `flask, supabase, requests, python-dotenv`（2026-11-25 から版を固定） |
 | `supabase/fire_location.sql` | | 使用中 | `fire_location` / `device_fire_alerts` の定義 |
 | `supabase/ap_nodes.sql` | | 使用中 | `ap_nodes` の定義 |
 | `firmware/esp32s3_ap/` | 約130（.ino） | 使用中 | ESP32-S3 AP のファームウェア・設定例・README（§8） |
@@ -231,11 +231,18 @@
 | `GET /api/camera_frame/<camera_id>` | 🔒 | 最新の JPEG（`X-Frame-At` に撮影時刻）。画像がまだ無ければ 204（`X-Camera-Status: waking`）。**呼ぶたびに「見ている」期限 `watch_until` を延ばす**（残り半分を切ったときだけ書く） |
 
 ### 5.5 エラーの形
-基本は `{"error": "..."}` と 400/500。ログインだけ `{"status":"error","message":...}`。古い API は例外の中身をそのまま返す。2026-10 以降の API は画面には固定文を返し、詳細はサーバーログに出す。
+基本は `{"error": "..."}` と 400/500。データベースの読み込みに失敗した回は 503（§6.0。画面はこのとき前の表示を残す）。ログインだけ `{"status":"error","message":...}`。古い API は例外の中身をそのまま返す。2026-10 以降の API は画面には固定文を返し、詳細はサーバーログに出す。
 
 ---
 
 ## 6. サーバーの処理（`api/app.py`）
+
+### 6.0 データベースの読み方（2026-11-25〜）
+- **クライアントは処理ごとに1つ**：`supabase` は `ThreadLocalSupabase`。同時に動いている処理（スレッド）ごとに Supabase のクライアントを1つ作って使い回す。Supabase の Python クライアントは HTTP/2 の接続を1本使い回すので、1つを複数の処理で同時に使うと、ときどき例外になる。画面は5秒ごとに 7〜9 本の API を同時に呼ぶので、以前は毎回どれかの読み込みが失敗し、欄が空になってはまた戻っていた（現地実験で「カードがちかちかして消える」）。使い方は今までと同じ `supabase.table(...)...execute()`。
+- **ログインは使い捨てのクライアントで**（`login_page`）：ログインするとそのクライアントは本人の権限に切り替わるので、データの読み書きに使う `supabase` とは分ける。
+- **読み込みの失敗は「0件」にしない**：各 `load_*` は例外を `db_read_failed()` に渡す。表や列がまだ無い（SQL を実行していない）ときだけ、今までどおり空として続ける（`is_missing_table_error`）。それ以外は `DbReadError` を投げ、API は 503 を返す。その回は何も書き込まない。以前は失敗を「0件」「火災なし」と扱って書き込んでいたため、次のことが起きえた：マップから作業者が消える、入口にいる人にうその「退場」→「入場」が記録される、火災中にウォッチへ「火災解除」が一瞬届く。
+- 例外：`device_fire_alerts` が読めない回は、ウォッチへの書き込みを飛ばすだけ（今出ている内容のまま）。
+- 新しい読み込みを足すときも、`except` の中で `db_read_failed('表の名前', e)` を呼んでから空の値を返す。
 
 ### 6.1 装置ごとの最新の状態 `load_wifi_reports()`
 2026-11-22 から `wifi_reports_v2`（新しい順に最大 5000 行）と `ble_reports`（直近 10 分、最大 5000 行）から作る。旧 `wifi_reports` は読まない。各装置について次の1行を返す（形は旧 `wifi_reports` の最新行と同じなので、マップ・入退場・通報・`/api/entry_status` はそのまま使える）。
@@ -356,6 +363,7 @@
 - 状態が「入場中 → 外」に変わったら、`entry_current` を `out`（`exit_time=今`）にして、`entry_log` に `exit` を追加する。
 - 返すのは `updated_at` が今日（日本時間 0:00〜24:00）の `entry_current` だけ。
 - 判定はこの API が呼ばれたときだけ走る。レポートの新しさは見ない（§13）。
+- AP の台帳・レポート・ユーザー・`entry_current` のどれかが読めなかった回は、判定せずに失敗を返す（§6.0。うその入退場を記録しないため）。
 
 ### 6.9 認証
 - Supabase Auth のメールとパスワードで認証する。ログインできたら、Flask の署名付き cookie セッションに `logged_in` / `user_email` を入れる。ロールや許可リストは無い。
@@ -400,8 +408,10 @@
 - **5 秒ごと**（`setInterval`）に `loadUserTable`、`loadEntryManagement`、`loadApNodesTable`、`loadCameras`、`loadPositionSettings`、`loadPositionEval`、`loadTunnelMap` を呼ぶ。AP位置設定とプリセット一覧は読み込み時だけ。
 - **Realtime**：anon key で `wifi_reports_v2` への INSERT を購読し、来たら `loadTunnelMap()`（2 秒に 1 回まで。`ble_reports` は毎秒届くので購読しない）。Supabase 側で `wifi_reports_v2` を Realtime の対象にし（`supabase/wifi_reports_v2_report.sql`）、anon が読めないと何も起きない（エラーにもならず、5 秒ごとの更新は動く）。2026-11-22 まで `latest_wifi_reports` を購読していた。
 - **ちらつき防止**：表やカードは、前回の応答（`JSON.stringify`）を `last*Sig` に覚えておき、同じなら描き直さない。マップは毎回描き直す。
+  - 比べるのは画面に出す項目だけ。heartbeat のたびに変わる値（`last_seen`・`online`・`wifi_rssi`）で表を作り直さない。ESP32 AP の表（`loadApNodesTable`）は「状態」と「最後の連絡」の2か所だけを書き換え（`updateApNodesStatus`）、カメラ設定の表は状態の札だけを書き換える（`updateCameraSettingsStatus`）。行・名前・距離・使う/使わないが変わったときだけ作り直す。
+  - ユーザー設定の表（`loadUserTable`）は、新しい行・書き換えた行があるときだけ作り直す（2026-11-25 まで、保存済みの行も未保存と数えて5秒ごとに作り直していた）。
 - **入力中は止める**：`input` / `select` にフォーカスがある間は `isEditing=true` になり、定期更新を丸ごと止める。
-- **エラー時**：API エラーや想定外の形のときは描画しない（表が消えないように）。
+- **エラー時**：API エラー（読み込みに失敗した回の 503 を含む。§6.0）や想定外の形のときは描画しない（表が消えないように）。
 
 ### 7.3 トンネルマップの描画（`renderTunnelMap`）
 - 大きさ：高さ 260px（`H`。CSS の `#tunnelMap` の高さと同じ値にすること）、幅は親要素いっぱい。余白は左右 44px・上下 36px。左端に「外」、右端に「奥」。
@@ -467,6 +477,7 @@
   - 末尾の「見やすさ調整」ブロック（2026-10）が後から上書きする。
   - 状態を上に置く（マップ → エリア → 入場 → 設定）。赤は火災と通報だけに使う。色だけでなく文字でも示す。文字のコントラストは 4.5:1 以上、本文 16px。
 - 色の変数：基本は `--pixel-blue #207ce5` / `--pixel-green #2d9610` / `--pixel-red #ff4b2b` / `--pixel-dark-solid #194c22`。状態色は `--state-*`（待機 `#8a5300`、避難 `#1a5fb4`、警戒 `#a34700`、火災 `#c62828`）。マップの色は `admin.js` の `C_*` に別に書いてある。
+- 欄（`.box`）とヘッダーにすりガラス（`backdrop-filter: blur`）は使わない（2026-11-25〜）。描き直しのたびに後ろを計算し直すので、性能の低い端末では欄がちらつくため。代わりに背景を白 88% にする（`style.css` 末尾の「2026-11-25 ちらつき対策」）。
 - チェックボックスにチェックが入ると、一番近い `.box` か `tr` に `.is-alerting`（赤い点滅）が付く（`admin.js` 末尾のイベント委譲）。すべてのチェックボックスに効く。
 - 画面幅への対応：1200px 以下ではエリアカードが横スクロール、1400px 以下では設定3列が縦に並ぶ。スマホ幅では余白を詰める。
 
@@ -595,7 +606,7 @@
 ### 運用
 1. **本番デプロイが失敗中**（§2.4）。PR #26 の変更は本番に出ていない。
 2. **実際に動かしていないコードがある**：PR #26 の `app.py`（ESP32 AP 受付、`ApMap`。構文チェックのみ通過）、ESP32 ファームウェア（コンパイルは成功、実機での動作は未確認）。
-3. `requirements.txt` のバージョンが未固定。venv（`api/properioai/`）がコミットされている。
+3. venv（`api/properioai/`）がコミットされている。（`requirements.txt` の版は 2026-11-25 に固定した）
 4. 2026-10 以前のテーブルの定義（SQL）がリポジトリに無い。
 
 ### セキュリティ
@@ -629,6 +640,7 @@
 | 2026-10-11 | #25 | マップから個別指示、位置推定の一本化と平滑化、UI 改善、火災位置の通知、ログイン画面、仕様書・CodeQL 指摘の修正 |
 | 2026-11-11 | #26 | AP を 100m 間隔に修正、`ApMap`、ESP32-S3 AP（heartbeat・管理画面・ファームウェア）、AGENTS.md ほか開発支援。**本番デプロイは失敗中** |
 | 2026-11-18 | #28〜#30 | ESP32 カメラ（外から見るコマ送り、RGB565→JPEG 変換）、カメラが位置の目印を兼ね距離を ESP32 AP 表と連動 |
+| 2026-11-25 | — | 欄がちらついて消える問題を修正：Supabase のクライアントを処理ごとに分ける（`ThreadLocalSupabase`）、読み込みの失敗を「0件」にせず 503 にする（うその入退場・火災解除も防ぐ）、表を余計に作り直さない、すりガラスをやめる、`requirements.txt` の版を固定 |
 | 2026-11-22 | — | `ble_reports` にも通報（`report`）。両方の表の最新の行のうち後から届いた方を使う（`report_of`） |
 | 2026-11-22 | — | ウォッチの送り先を `wifi_reports_v2` / `ble_reports` に一本化（旧 `wifi_reports` は読まない）。通報は `wifi_reports_v2.report`、画面の Realtime も `wifi_reports_v2`。作業者ポップアップが下の欄に隠れないように・値が無いときは理由を表示 |
 | 2026-11-22 | — | 画面を縦長に（全欄を縦 1 列、欄の間 56px）。「使い方」は欄の中で広げて、ほかの欄と重ならないように |

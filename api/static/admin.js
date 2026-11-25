@@ -609,6 +609,7 @@ async function loadUserTable() {
     return {
       // original_area: row.dataset.originalArea || '',
       original_user: row.dataset.originalUser || '',
+      original_device_id: row.dataset.originalDeviceId || '',
       // area_id: inputs[0] ? inputs[0].value : '',
       username: inputs[0] ? inputs[0].value : '',
       device_id: inputs[1] ? inputs[1].value : ''
@@ -633,8 +634,11 @@ async function loadUserTable() {
     return;
   }
 
+  // 新しい行・書き換えた行があるときだけ、それを残して描き直す。保存済みのままの行しかなく、
+  // サーバーの中身も前回と同じなら描き直さない（以前は保存済みの行も「未保存」と数え、5 秒ごとに作り直していた）
+  const dirty = unsaved.some(u => !u.original_user || u.username !== u.original_user || u.device_id !== u.original_device_id);
   const sig = JSON.stringify(userList);
-  if (sig === lastUserListSig && unsaved.length === 0) return;
+  if (sig === lastUserListSig && !dirty) return;
   lastUserListSig = sig;
 
   body.innerHTML = '';
@@ -1443,8 +1447,13 @@ async function loadApNodesTable() {
   }
   if (!Array.isArray(nodes)) return;
 
-  const sig = JSON.stringify(nodes);
-  if (sig === lastApNodesSig) return;
+  // 表を作り直すのは、行や入力欄の中身が変わったときだけ。稼働状態と最後の連絡の時刻は 30 秒ごとに
+  // 変わるので、その 2 か所だけを書き換える（毎回作り直すと欄の高さが揺れてちらつくため）
+  const sig = JSON.stringify(nodes.map(n => [n.mac, n.label, n.distance_m, n.enabled, n.fw, !!n.last_seen]));
+  if (sig === lastApNodesSig) {
+    updateApNodesStatus(body, nodes);
+    return;
+  }
   lastApNodesSig = sig;
 
   body.innerHTML = '';
@@ -1456,13 +1465,11 @@ async function loadApNodesTable() {
   nodes.forEach(n => {
     const row = document.createElement('tr');
     row.dataset.mac = n.mac;
-    const online = !!n.online;
     const enabled = n.enabled !== false;
     const distance = n.distance_m === null || n.distance_m === undefined ? '' : n.distance_m;
-    const manual = !n.last_seen;   // 画面から追加して、まだ heartbeat が来ていない
     const kind = String(n.fw || '').startsWith('ble-') ? 'BLE' : 'Wi-Fi';
     row.innerHTML = `
-      <td><span class="entry-badge ${online ? 'entry-in' : 'entry-out'}">${online ? '稼働中' : (manual ? '手動登録' : '停止')}</span> <small>${kind}</small></td>
+      <td><span class="entry-badge"></span> <small>${kind}</small></td>
       <td><input class="input ap-node-label" type="text" value="${escapeHtml(n.label || '')}" placeholder="A050"></td>
       <td class="mono-cell">${escapeHtml(n.mac)}</td>
       <td><input class="input ap-node-distance" type="number" min="0" step="1" value="${escapeHtml(distance)}" placeholder="未設定"></td>
@@ -1472,13 +1479,35 @@ async function loadApNodesTable() {
           <option value="0" ${enabled ? '' : 'selected'}>使わない</option>
         </select>
       </td>
-      <td>${n.last_seen ? formatEntryTime(n.last_seen) : '—'}</td>
+      <td class="ap-node-seen"></td>
       <td class="ap-node-actions">
         <button class="button is-success is-small" onclick="saveApNode(this)">保存</button>
         <button class="button is-danger is-small" onclick="deleteApNode(this)">削除</button>
       </td>
     `;
+    setApNodeStatus(row, n);
     body.appendChild(row);
+  });
+}
+
+// ESP32 AP の行の「状態」と「最後の連絡」だけを書く（入力欄は触らない）
+function setApNodeStatus(row, n) {
+  const online = !!n.online;
+  const manual = !n.last_seen;   // 画面から追加して、まだ heartbeat が来ていない
+  const badge = row.querySelector('.entry-badge');
+  if (badge) {
+    badge.textContent = online ? '稼働中' : (manual ? '手動登録' : '停止');
+    badge.classList.toggle('entry-in', online);
+    badge.classList.toggle('entry-out', !online);
+  }
+  const seen = row.querySelector('.ap-node-seen');
+  if (seen) seen.textContent = n.last_seen ? formatEntryTime(n.last_seen) : '—';
+}
+
+function updateApNodesStatus(body, nodes) {
+  nodes.forEach(n => {
+    const row = body.querySelector(`tr[data-mac="${CSS.escape(n.mac)}"]`);
+    if (row) setApNodeStatus(row, n);
   });
 }
 
@@ -1585,6 +1614,7 @@ async function deleteApNode(button) {
 const CAMERA_FRAME_INTERVAL_MS = 1000;
 const CAMERA_AUTO_STOP_MS = 10 * 60 * 1000;
 let lastCamerasSig = null;
+let lastCameraSettingsSig = null;
 const cameraViewers = {};   // camera_id -> { timer, objectUrl, startedAt, stopped }
 
 async function loadCameras() {
@@ -1605,12 +1635,37 @@ async function loadCameras() {
   }
   if (!Array.isArray(cameras)) return;
 
-  const sig = JSON.stringify(cameras.map(c => [c.camera_id, c.label, c.distance_m, c.distance_source, c.online, c.enabled, c.wifi_rssi]));
+  // 表示に使う項目だけで比べる（wifi_rssi などは heartbeat のたびに変わるが画面には出ない）。
+  // 設定の表は、稼働状態だけが変わったときは作り直さずに状態の札だけ書き換える
+  const settingsSig = JSON.stringify(cameras.map(c => [c.camera_id, c.label, c.distance_m, c.distance_source, c.ap_label, c.ap_mac, c.enabled]));
+  const sig = JSON.stringify([settingsSig, cameras.map(c => !!c.online)]);
   if (sig === lastCamerasSig) return;
+  const settingsChanged = lastCamerasSig === null || settingsSig !== lastCameraSettingsSig;
   lastCamerasSig = sig;
 
   renderCameraTiles(grid, cameras);
-  if (!isEditing) renderCameraSettings(cameras);
+  if (isEditing) return;
+  if (settingsChanged) {
+    lastCameraSettingsSig = settingsSig;
+    renderCameraSettings(cameras);
+  } else {
+    updateCameraSettingsStatus(cameras);
+  }
+}
+
+function setCameraSettingsBadge(badge, cam) {
+  badge.textContent = cam.online ? '稼働中' : '停止';
+  badge.classList.toggle('entry-in', !!cam.online);
+  badge.classList.toggle('entry-out', !cam.online);
+}
+
+function updateCameraSettingsStatus(cameras) {
+  const body = document.getElementById('cameraSettingsBody');
+  if (!body) return;
+  cameras.forEach(cam => {
+    const badge = body.querySelector(`tr[data-camera-id="${CSS.escape(cam.camera_id)}"] .entry-badge`);
+    if (badge) setCameraSettingsBadge(badge, cam);
+  });
 }
 
 function renderCameraTiles(grid, cameras) {
