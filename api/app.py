@@ -19,7 +19,58 @@ app.secret_key = 'mamotchi_secret_key_pixel'
 #supabase API Key
 url = os.environ.get("SUPABASE_URL")
 key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
-supabase: Client = create_client(url, key)
+
+
+class ThreadLocalSupabase:
+    """Supabase のクライアントを、同時に動いている処理（スレッド）ごとに 1 つずつ持つ。
+    Supabase の Python クライアントは HTTP/2 の接続を 1 本使い回すので、1 つを複数の処理で同時に使うと
+    ときどき例外になる（2026-11-25 本番で確認。画面は 5 秒ごとに 7〜9 本の API を同時に呼ぶので、
+    毎回どれかの読み込みが失敗し、欄が空になってはまた戻る＝ちらつく、の原因だった）。
+    使い方は今までの supabase と同じ（supabase.table(...)...execute()）。"""
+
+    def __init__(self, url, key):
+        self._url = url
+        self._key = key
+        self._local = threading.local()
+
+    def client(self) -> Client:
+        c = getattr(self._local, 'client', None)
+        if c is None:
+            c = create_client(self._url, self._key)
+            self._local.client = c
+        return c
+
+    def __getattr__(self, name):
+        return getattr(self.client(), name)
+
+
+supabase = ThreadLocalSupabase(url, key)
+
+
+class DbReadError(Exception):
+    """データベースの読み込みに失敗した（表が無いのとは別）。
+    画面用の API は 503 を返し、画面は前の表示を残す（「0 件」と返して欄が空になるのを防ぐ）。"""
+
+
+def is_missing_table_error(e):
+    """表や列がまだ作られていない（SQL を実行していない）ときの例外か。この場合は今までどおり空として続ける"""
+    s = str(e)
+    return 'PGRST205' in s or '42P01' in s or '42703' in s or 'does not exist' in s \
+        or 'Could not find the table' in s
+
+
+def db_read_failed(what, e):
+    """読み込みの例外の扱い。表が無いだけなら戻って呼び出し元が空の値を返す。それ以外は DbReadError を投げる"""
+    print(f"Error loading {what}: {e}")
+    if not is_missing_table_error(e):
+        raise DbReadError(what) from e
+
+
+@app.errorhandler(DbReadError)
+def handle_db_read_error(e):
+    # 読めなかった回は何も書き込まずに 503 を返す（画面は前の表示を残し、次の 5 秒後の更新で読み直す）。
+    # 失敗を「0 件」「火災なし」と扱って書き込むと、うその退場の記録や火災の解除がウォッチに届くため
+    return jsonify({'error': f'データベースの読み込みに失敗しました（{e}）。少し待ってもう一度お試しください'}), 503
 
 # TABLE_AP_AREA = "ap_areas"
 # TABLE_AREA_STATUS = "area_status"
@@ -94,14 +145,14 @@ def load_wifi_reports():
         wifi_rows = (supabase.table(TABLE_WIFI_SCAN).select("*")
                      .order("id", desc=True).limit(LATEST_WIFI_ROWS).execute().data or [])
     except Exception as e:
-        print(f"Error loading {TABLE_WIFI_SCAN}: {e}")
+        db_read_failed(TABLE_WIFI_SCAN, e)
         wifi_rows = []
     since = (datetime.now(timezone.utc) - timedelta(seconds=LATEST_BLE_WINDOW_SEC)).isoformat()
     try:
         ble_rows = (supabase.table(TABLE_BLE_SCAN).select("*").gte("created_at", since)
                     .order("id", desc=True).limit(LATEST_WIFI_ROWS).execute().data or [])
     except Exception as e:
-        print(f"Error loading {TABLE_BLE_SCAN}: {e}")
+        db_read_failed(TABLE_BLE_SCAN, e)
         ble_rows = []
 
     latest_wifi, latest_ble = {}, {}
@@ -135,7 +186,7 @@ def load_ap_positions():
         response = supabase.table(TABLE_AP_POSITIONS).select("*").execute()
         return {row["mac"]: row["position"] for row in response.data}
     except Exception as e:
-        print(f"Error loading ap_positions: {e}")
+        db_read_failed('ap_positions', e)
         return {}
 
 
@@ -146,7 +197,7 @@ def load_ap_position_rows():
     try:
         rows = supabase.table(TABLE_AP_POSITIONS).select("*").execute().data or []
     except Exception as e:
-        print(f"Error loading ap_positions: {e}")
+        db_read_failed('ap_positions', e)
         return []
     out = []
     for row in rows:
@@ -172,7 +223,7 @@ def load_user_table():
         response = supabase.table(TABLE_USER).select("*").execute()
         return response.data
     except Exception as e:
-        print(f"Error loading SSID table: {e}")
+        db_read_failed('user_table', e)
         return []
 
 
@@ -181,7 +232,7 @@ def load_area_table():
         response = supabase.table(TABLE_AREA_STATUS).select("bssid, area_id").execute()
         return response.data
     except Exception as e:
-        print(f"Error loading area table: {e}")
+        db_read_failed('area_status', e)
         return []
 
 
@@ -234,7 +285,7 @@ def load_device_instructions():
         response = supabase.table(TABLE_DEVICE_INSTRUCTIONS).select("*").execute()
         return response.data or []
     except Exception as e:
-        print(f"Error loading device_instructions: {e}")
+        db_read_failed('device_instructions', e)
         return []
 
 
@@ -272,7 +323,7 @@ def load_ap_presets():
         response = supabase.table(TABLE_AP_PRESETS).select("*").order("name").execute()
         return response.data or []
     except Exception as e:
-        print(f"Error loading ap_position_presets: {e}")
+        db_read_failed('ap_position_presets', e)
         return []
 
 
@@ -284,7 +335,7 @@ def load_area_order():
         fallback = supabase.table(TABLE_AREA_STATUS).select("area_id").execute()
         return [item["area_id"] for item in (fallback.data or [])]
     except Exception as e:
-        print(f"Error loading area order: {e}")
+        db_read_failed('area_order', e)
         return []
 
 
@@ -385,7 +436,7 @@ def load_ap_nodes():
         res = supabase.table(TABLE_AP_NODES).select("*").execute()
         return res.data or []
     except Exception as e:
-        print(f"Error loading ap_nodes: {e}")
+        db_read_failed('ap_nodes', e)
         return []
 
 
@@ -660,7 +711,7 @@ def load_recent_scan_reports(table, window_sec):
             .execute()
         ).data or []
     except Exception as e:
-        print(f"Error loading {table}: {e}")
+        db_read_failed(table, e)
         return []
 
 
@@ -713,7 +764,7 @@ def load_position_method():
     try:
         row = (supabase.table(TABLE_POSITION_SETTINGS).select("method").eq("id", 1).execute().data or [None])[0]
     except Exception as e:
-        print(f"Error loading position_settings: {e}")
+        db_read_failed('position_settings', e)
         row = None
     method = (row or {}).get('method')
     return method if method in POSITION_METHOD_KEYS else DEFAULT_POSITION_METHOD
@@ -854,7 +905,7 @@ def load_fire_location():
         res = supabase.table(TABLE_FIRE_LOCATION).select("*").eq("id", 1).execute()
         row = (res.data or [None])[0]
     except Exception as e:
-        print(f"Error loading fire_location: {e}")
+        db_read_failed('fire_location', e)
         row = None
     if not row or not row.get('active') or row.get('distance_m') is None:
         return {'active': False, 'distance_m': None, 'updated_at': (row or {}).get('updated_at')}
@@ -909,6 +960,7 @@ def sync_device_fire_alerts(alerts):
         res = supabase.table(TABLE_DEVICE_FIRE_ALERTS).select("*").execute()
         current = {r['device_id']: r for r in (res.data or []) if r.get('device_id')}
     except Exception as e:
+        # 読めなかった回は書き込まないだけ（今ウォッチに出ている内容はそのまま。次の回に直す）
         print(f"Error loading device_fire_alerts: {e}")
         return
 
@@ -978,16 +1030,19 @@ def login_page():
         if not email or not password:
             return jsonify({"status": "error", "message": "IDとパスワードを入力してください"}), 400
 
+        # ログインは使い捨てのクライアントで行う（ログインするとそのクライアントは本人の権限に切り替わるため、
+        # データの読み書きに使う supabase とは分ける）
+        auth = create_client(url, key).auth
         try:
             if mode == "signup":
-                result = supabase.auth.sign_up({"email": email, "password": password})
+                result = auth.sign_up({"email": email, "password": password})
                 if result.user:
                     session['logged_in'] = True
                     session['user_email'] = result.user.email
                     return jsonify({"status": "success", "redirect": url_for("index")})
                 return jsonify({"status": "error", "message": "登録に失敗しました"}), 400
             else:
-                result = supabase.auth.sign_in_with_password({"email": email, "password": password})
+                result = auth.sign_in_with_password({"email": email, "password": password})
                 session['logged_in'] = True
                 session['user_email'] = result.user.email
                 return jsonify({"status": "success", "redirect": url_for("index")})
@@ -1394,7 +1449,7 @@ def load_camera(camera_id):
         res = supabase.table(TABLE_CAMERAS).select("*").eq("camera_id", camera_id).execute()
         return (res.data or [None])[0]
     except Exception as e:
-        print(f"Error loading camera {camera_id}: {e}")
+        db_read_failed(f'camera {camera_id}', e)
         return None
 
 
@@ -1504,7 +1559,7 @@ def handle_cameras():
         try:
             rows = supabase.table(TABLE_CAMERAS).select("*").execute().data or []
         except Exception as e:
-            print(f"Error loading cameras: {e}")
+            db_read_failed('cameras', e)
             rows = []
         nodes_by_mac = {norm_mac(n.get('mac')): n for n in load_ap_nodes() if n.get('mac')}
         for r in rows:
@@ -1695,7 +1750,7 @@ def load_segment_instructions():
     try:
         rows = supabase.table(TABLE_SEGMENT_INSTRUCTIONS).select("*").execute().data or []
     except Exception as e:
-        print(f"Error loading segment_instructions: {e}")
+        db_read_failed('segment_instructions', e)
         return {}
     return {r['segment_key']: r for r in rows if r.get('segment_key')}
 
@@ -1704,7 +1759,7 @@ def load_device_segment_state():
     try:
         rows = supabase.table(TABLE_DEVICE_SEGMENT_STATE).select("*").execute().data or []
     except Exception as e:
-        print(f"Error loading device_segment_state: {e}")
+        db_read_failed('device_segment_state', e)
         return {}
     return {r['device_id']: r for r in rows if r.get('device_id')}
 
@@ -1849,7 +1904,7 @@ def handle_position_eval():
         try:
             rows = supabase.table(TABLE_POSITION_EVAL).select("*").order("id", desc=True).limit(2000).execute().data or []
         except Exception as e:
-            print(f"Error loading position_eval: {e}")
+            db_read_failed('position_eval', e)
             rows = []
         return jsonify({'summary': summarize_position_eval(rows), 'recent': rows[:20]})
 
@@ -2037,7 +2092,7 @@ def do_entry_status_update():
         cur_res = supabase.table(TABLE_ENTRY_CURRENT).select("*").execute()
         current_status = {row['device_id']: row for row in (cur_res.data or [])}
     except Exception as e:
-        print(f"Error loading entry_current: {e}")
+        db_read_failed('entry_current', e)
         current_status = {}
 
     now = now_iso()
@@ -2086,7 +2141,7 @@ def do_entry_status_update():
         )
         return res.data or []
     except Exception as e:
-        print(f"Error fetching entry_current: {e}")
+        db_read_failed('entry_current', e)
         return []
 
 

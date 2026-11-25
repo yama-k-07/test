@@ -89,6 +89,7 @@ ESP32-S3 ビーコン（BLE）──heartbeat──> /api/ap_heartbeat ──> S
 | 入場・退場の判定 | `do_entry_status_update` |
 | 装置の一覧・通報・位置の目印（マップ・入退場・`/api/entry_status` の元） | `load_wifi_reports`（`wifi_reports_v2` / `ble_reports` から装置ごとの最新の状態を作る。BLE を優先する秒数 `LATEST_BLE_PRIORITY_SEC`）。通報をどちらの表から取るかは `report_of`（後から届いた方）、`device_instructions` に写すのは `sync_device_reports_from_wifi` |
 | オンライン判定の秒数 | `ONLINE_THRESHOLD_SEC`（ウォッチ）、`AP_NODE_ONLINE_SEC`（ESP32 AP） |
+| データベースへの接続・読み込み失敗の扱い | `ThreadLocalSupabase`（処理ごとのクライアント）、`db_read_failed` / `is_missing_table_error` / `DbReadError`（失敗は 503、表が無いだけなら空）、`handle_db_read_error` |
 | API を追加する | 既存の `@app.route` を真似る。管理画面用はログイン必須の `@login_required` を付ける。SPEC.md §5 の API 表に追記 |
 | テーブルを追加する | `supabase/新しい名前.sql` を作り、`app.py` 冒頭に `TABLE_XXX = "..."` を足す。SPEC.md §4 に追記 |
 | ESP32 AP からの受付 | `ap_heartbeat`（トークン認証）、`handle_ap_nodes` |
@@ -120,7 +121,8 @@ ESP32-S3 ビーコン（BLE）──heartbeat──> /api/ap_heartbeat ──> S
 - 位置推定の方式は ①〜⑥ の6つで、すべて `estimate_positions` の中（`estimate_methods`）で計算する。画面に使うのは `position_settings` で選んだ1つ。新しい方式を足すときも `POSITION_METHODS` に足し、`estimate_positions` の外に別の計算を作らない。
 - AP の距離と表示名は `app.py` と `admin.js` の**両方**にある（`AP_LABELS` / `AP_DISTANCES_M` ↔ `AP_LABELS` / `AP_POSITION_DISTANCES_M`）。片方だけ変えない。同様に指示の値（`DEVICE_INSTRUCTIONS` ↔ `DEVICE_INSTRUCTION_LABELS`）。
 - MAC の比較は `norm_mac` で大文字に揃えてから行う（Android は小文字、ESP32 は大文字）。
-- **画面の定期更新パターン**: 5 秒ポーリング＋前回と同じ内容なら再描画しない（`last*Sig`）＋入力中は更新しない（`isEditing`）。新しい表もこれに合わせる。
+- **画面の定期更新パターン**: 5 秒ポーリング＋前回と同じ内容なら再描画しない（`last*Sig`）＋入力中は更新しない（`isEditing`）。新しい表もこれに合わせる。`last*Sig` には画面に出す項目だけを入れる（heartbeat のたびに変わる `last_seen` などで表を作り直すと、ちらつく）。
+- **読み込みの失敗を「0 件」にしない**: `load_*` の `except` では `db_read_failed('表の名前', e)` を呼ぶ（表が無いだけなら空で続け、それ以外は 503）。失敗を空として扱うと、うその退場の記録や火災の解除がウォッチに届く（SPEC §6.0）。`supabase` は処理ごとに別のクライアント（`ThreadLocalSupabase`）なので、モジュールの外で `create_client` を別に作って使い回さない。
 - 画面に文字列を入れるときは `escapeHtml()` を通す（`innerHTML` に生で入れない）。
 - チェックボックスは全体の仕組みで「行が赤く点滅（火災表示）」になる。火災以外のオン/オフはプルダウンにする。
 - 見た目の調整は `style.css` 末尾のブロックで行う。**ドット調フォント・ピクセル枠・ロゴ（`banner.png`）は変えない。**

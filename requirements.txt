@@ -1,4 +1,5 @@
-flask
-supabase
-requests
-python-dotenv
+# 版を固定する（配備のたびに新しい版が入って動きが変わらないように）。上げるときは手元で確かめてから
+flask==3.1.3
+supabase==2.34.1
+requests==2.34.2
+python-dotenv==1.2.4
